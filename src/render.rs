@@ -35,10 +35,10 @@ pub fn render_svg(svg_path: &Path, dpi_scale: f32) -> Result<RenderedView> {
     let svg =
         fs::read(svg_path).with_context(|| format!("failed to read {}", svg_path.display()))?;
     let dpi_scale = dpi_scale.clamp(1.0, 8.0);
-    let bboxes = extract_element_bboxes(&svg, dpi_scale);
     let options = usvg::Options::default();
     let tree = usvg::Tree::from_data(&svg, &options)
         .with_context(|| format!("failed to parse SVG {}", svg_path.display()))?;
+    let bboxes = extract_element_bboxes(&tree, dpi_scale);
     let size = tree.size().to_int_size();
     let width = ((size.width() as f32) * dpi_scale).round().max(1.0) as u32;
     let height = ((size.height() as f32) * dpi_scale).round().max(1.0) as u32;
@@ -72,110 +72,31 @@ fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>> {
     Ok(png)
 }
 
-fn extract_element_bboxes(svg: &[u8], scale: f32) -> Vec<ElementBBox> {
-    let Ok(text) = std::str::from_utf8(svg) else {
-        return Vec::new();
-    };
-    let Ok(doc) = roxmltree::Document::parse(text) else {
-        return Vec::new();
-    };
-
+fn extract_element_bboxes(tree: &usvg::Tree, scale: f32) -> Vec<ElementBBox> {
     let mut bboxes = Vec::new();
-    for node in doc.descendants().filter(|node| node.has_tag_name("g")) {
-        let Some(element_id) = node.attribute("id").filter(|id| !id.is_empty()) else {
-            continue;
-        };
-        if let Some((x1, y1, x2, y2)) = descendant_bbox(node) {
-            bboxes.push(ElementBBox {
-                element_id: ElementId::new(element_id),
-                x: x1 * scale,
-                y: y1 * scale,
-                width: (x2 - x1).max(0.0) * scale,
-                height: (y2 - y1).max(0.0) * scale,
-            });
-        }
-    }
+    collect_group_bboxes(tree.root(), scale, &mut bboxes);
     bboxes
 }
 
-fn descendant_bbox(node: roxmltree::Node<'_, '_>) -> Option<(f32, f32, f32, f32)> {
-    let mut out: Option<(f32, f32, f32, f32)> = None;
-    for child in node.descendants().filter(|child| child.is_element()) {
-        let (tx, ty) = cumulative_translate(child);
-        let bbox = element_bbox(child, tx, ty);
-        if let Some((x1, y1, x2, y2)) = bbox {
-            out = Some(match out {
-                Some((ox1, oy1, ox2, oy2)) => (ox1.min(x1), oy1.min(y1), ox2.max(x2), oy2.max(y2)),
-                None => (x1, y1, x2, y2),
+fn collect_group_bboxes(group: &usvg::Group, scale: f32, bboxes: &mut Vec<ElementBBox>) {
+    if !group.id().is_empty() {
+        let bbox = group.abs_bounding_box();
+        if bbox.width() > 0.0 && bbox.height() > 0.0 {
+            bboxes.push(ElementBBox {
+                element_id: ElementId::new(group.id()),
+                x: bbox.x() * scale,
+                y: bbox.y() * scale,
+                width: bbox.width() * scale,
+                height: bbox.height() * scale,
             });
         }
     }
-    out
-}
 
-fn element_bbox(node: roxmltree::Node<'_, '_>, tx: f32, ty: f32) -> Option<(f32, f32, f32, f32)> {
-    let tag = node.tag_name().name();
-    match tag {
-        "rect" | "image" => {
-            let x = parse_number(node.attribute("x")).unwrap_or(0.0) + tx;
-            let y = parse_number(node.attribute("y")).unwrap_or(0.0) + ty;
-            let width = parse_number(node.attribute("width"))?;
-            let height = parse_number(node.attribute("height"))?;
-            Some((x, y, x + width, y + height))
-        }
-        "circle" => {
-            let cx = parse_number(node.attribute("cx"))? + tx;
-            let cy = parse_number(node.attribute("cy"))? + ty;
-            let r = parse_number(node.attribute("r"))?;
-            Some((cx - r, cy - r, cx + r, cy + r))
-        }
-        "ellipse" => {
-            let cx = parse_number(node.attribute("cx"))? + tx;
-            let cy = parse_number(node.attribute("cy"))? + ty;
-            let rx = parse_number(node.attribute("rx"))?;
-            let ry = parse_number(node.attribute("ry"))?;
-            Some((cx - rx, cy - ry, cx + rx, cy + ry))
-        }
-        _ => None,
-    }
-}
-
-fn cumulative_translate(node: roxmltree::Node<'_, '_>) -> (f32, f32) {
-    let mut tx = 0.0;
-    let mut ty = 0.0;
-    for ancestor in node.ancestors().filter(|ancestor| ancestor.is_element()) {
-        if let Some((x, y)) = parse_translate(ancestor.attribute("transform")) {
-            tx += x;
-            ty += y;
+    for child in group.children() {
+        if let usvg::Node::Group(child_group) = child {
+            collect_group_bboxes(child_group, scale, bboxes);
         }
     }
-    (tx, ty)
-}
-
-fn parse_translate(transform: Option<&str>) -> Option<(f32, f32)> {
-    let transform = transform?;
-    let start = transform.find("translate(")? + "translate(".len();
-    let end = transform[start..].find(')')? + start;
-    let values = transform[start..end]
-        .split(|ch: char| ch == ',' || ch.is_ascii_whitespace())
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
-    let x = parse_number(values.first().copied())?;
-    let y = values
-        .get(1)
-        .and_then(|value| parse_number(Some(value)))
-        .unwrap_or(0.0);
-    Some((x, y))
-}
-
-fn parse_number(value: Option<&str>) -> Option<f32> {
-    let value = value?.trim();
-    let numeric = value
-        .trim_end_matches("px")
-        .chars()
-        .take_while(|ch| ch.is_ascii_digit() || matches!(ch, '.' | '-' | '+'))
-        .collect::<String>();
-    numeric.parse().ok()
 }
 
 #[cfg(test)]
@@ -185,7 +106,8 @@ mod tests {
     #[test]
     fn extracts_group_bboxes_with_translation() {
         let svg = br#"<svg><g id="1" transform="translate(10, 20)"><rect x="5" y="6" width="100" height="50"/></g></svg>"#;
-        let bboxes = extract_element_bboxes(svg, 1.0);
+        let tree = usvg::Tree::from_data(svg, &usvg::Options::default()).unwrap();
+        let bboxes = extract_element_bboxes(&tree, 1.0);
         assert_eq!(bboxes.len(), 1);
         assert_eq!(bboxes[0].element_id, ElementId::new("1"));
         assert_eq!(bboxes[0].x, 15.0);
@@ -195,11 +117,66 @@ mod tests {
     }
 
     #[test]
+    fn extracts_group_bboxes_with_nested_scale_and_translate() {
+        let svg = br#"<svg>
+            <g transform="translate(10, 20)">
+                <g id="element-1" transform="scale(2)">
+                    <rect x="5" y="6" width="100" height="50"/>
+                </g>
+            </g>
+        </svg>"#;
+        let tree = usvg::Tree::from_data(svg, &usvg::Options::default()).unwrap();
+        let bboxes = extract_element_bboxes(&tree, 1.0);
+
+        assert_eq!(bboxes.len(), 1);
+        assert_eq!(bboxes[0].element_id, ElementId::new("element-1"));
+        assert_eq!(bboxes[0].x, 20.0);
+        assert_eq!(bboxes[0].y, 32.0);
+        assert_eq!(bboxes[0].width, 200.0);
+        assert_eq!(bboxes[0].height, 100.0);
+    }
+
+    #[test]
+    fn extracts_group_bboxes_with_rotation() {
+        let svg = br#"<svg><g id="rotated" transform="rotate(90)"><rect x="10" y="20" width="30" height="40"/></g></svg>"#;
+        let tree = usvg::Tree::from_data(svg, &usvg::Options::default()).unwrap();
+        let bboxes = extract_element_bboxes(&tree, 1.0);
+
+        assert_eq!(bboxes.len(), 1);
+        assert_eq!(bboxes[0].element_id, ElementId::new("rotated"));
+        assert_close(bboxes[0].x, -60.0);
+        assert_close(bboxes[0].y, 10.0);
+        assert_close(bboxes[0].width, 40.0);
+        assert_close(bboxes[0].height, 30.0);
+    }
+
+    #[test]
+    fn extracts_group_bboxes_for_paths() {
+        let svg = br#"<svg><g id="path-element"><path d="M 10 20 L 40 20 L 40 60 Z"/></g></svg>"#;
+        let tree = usvg::Tree::from_data(svg, &usvg::Options::default()).unwrap();
+        let bboxes = extract_element_bboxes(&tree, 1.0);
+
+        assert_eq!(bboxes.len(), 1);
+        assert_eq!(bboxes[0].element_id, ElementId::new("path-element"));
+        assert_eq!(bboxes[0].x, 10.0);
+        assert_eq!(bboxes[0].y, 20.0);
+        assert_eq!(bboxes[0].width, 30.0);
+        assert_eq!(bboxes[0].height, 40.0);
+    }
+
+    #[test]
     fn malformed_svg_returns_error_not_panic() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("broken.svg");
         fs::write(&path, "<svg><g>").unwrap();
 
         assert!(render_svg(&path, 4.0).is_err());
+    }
+
+    fn assert_close(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < 0.01,
+            "expected {actual} to be close to {expected}"
+        );
     }
 }
