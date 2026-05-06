@@ -1,0 +1,229 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to package, e.g. v0.1.0. Manual runs do not publish crates or Homebrew.'
+        required: true
+        default: 'v0.1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Package ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - os: macos-13
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive: tar.gz
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Stage archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.version }}"
+          fi
+          name="c4tui-${version}-${{ matrix.target }}"
+          mkdir -p "dist/${name}"
+          cp "target/${{ matrix.target }}/release/c4tui" "dist/${name}/"
+          cp README.md LICENSE-APACHE LICENSE-MIT "dist/${name}/"
+          cp docs/c4tui.1 "dist/${name}/"
+          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          shasum -a 256 "dist/${name}.tar.gz" > "dist/${name}.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: c4tui-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  crate:
+    name: Publish crate
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check crates.io token
+        shell: bash
+        run: |
+          if [[ -z "${CARGO_REGISTRY_TOKEN}" ]]; then
+            echo "CARGO_REGISTRY_TOKEN is required to publish c4tui from a release tag." >&2
+            exit 1
+          fi
+      - name: Check tag matches Cargo version
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [[ "${cargo_version}" != "${tag_version}" ]]; then
+            echo "Cargo.toml version ${cargo_version} does not match tag ${GITHUB_REF_NAME}." >&2
+            exit 1
+          fi
+      - run: cargo publish --locked --token "$CARGO_REGISTRY_TOKEN"
+
+  release:
+    name: GitHub Release and Homebrew tap
+    needs: [package, crate]
+    if: always() && needs.package.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.crate.result == 'success')
+    runs-on: ubuntu-latest
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+          merge-multiple: true
+      - name: Prepare release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.version }}"
+          fi
+          {
+            echo "# c4tui ${version}"
+            echo
+            echo "## Install"
+            echo
+            echo '```sh'
+            echo 'cargo install c4tui'
+            echo 'brew install scshafe/tap/c4tui'
+            echo '```'
+            echo
+            echo "## Archives"
+            echo
+            cat dist-artifacts/*.sha256
+          } > release-notes.md
+      - name: Create or update GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" dist-artifacts/* --clobber
+            gh release edit "${GITHUB_REF_NAME}" --notes-file release-notes.md
+          else
+            gh release create "${GITHUB_REF_NAME}" dist-artifacts/* --notes-file release-notes.md --title "c4tui ${GITHUB_REF_NAME}"
+          fi
+      - name: Verify packaging on manual run
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: ls -lh dist-artifacts && cat release-notes.md
+      - name: Update Homebrew tap
+        if: startsWith(github.ref, 'refs/tags/v') && env.HOMEBREW_TAP_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          base="https://github.com/scshafe/c4tui/releases/download/${GITHUB_REF_NAME}"
+          arm_archive="c4tui-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz"
+          intel_archive="c4tui-${GITHUB_REF_NAME}-x86_64-apple-darwin.tar.gz"
+          linux_archive="c4tui-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz"
+          linux_arm_archive="c4tui-${GITHUB_REF_NAME}-aarch64-unknown-linux-gnu.tar.gz"
+          arm_sha=$(cut -d ' ' -f1 "dist-artifacts/${arm_archive}.sha256")
+          intel_sha=$(cut -d ' ' -f1 "dist-artifacts/${intel_archive}.sha256")
+          linux_sha=$(cut -d ' ' -f1 "dist-artifacts/${linux_archive}.sha256")
+          linux_arm_sha=$(cut -d ' ' -f1 "dist-artifacts/${linux_arm_archive}.sha256")
+          mkdir -p tap/Formula
+          cat > tap/Formula/c4tui.rb <<EOF
+          class C4tui < Formula
+            desc "Interactive terminal viewer for Structurizr C4 diagrams"
+            homepage "https://github.com/scshafe/c4tui"
+            version "${version}"
+            license "MIT OR Apache-2.0"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "${base}/${arm_archive}"
+                sha256 "${arm_sha}"
+              else
+                url "${base}/${intel_archive}"
+                sha256 "${intel_sha}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "${base}/${linux_arm_archive}"
+                sha256 "${linux_arm_sha}"
+              else
+                url "${base}/${linux_archive}"
+                sha256 "${linux_sha}"
+              end
+            end
+
+            def install
+              bin.install "c4tui"
+              man1.install "c4tui.1"
+            end
+
+            test do
+              assert_match "c4tui", shell_output("#{bin}/c4tui --help")
+            end
+          end
+          EOF
+          if gh api repos/scshafe/homebrew-tap >/dev/null 2>&1; then
+            tmp=$(mktemp -d)
+            git clone "https://x-access-token:${GH_TOKEN}@github.com/scshafe/homebrew-tap.git" "$tmp/homebrew-tap"
+            mkdir -p "$tmp/homebrew-tap/Formula"
+            cp tap/Formula/c4tui.rb "$tmp/homebrew-tap/Formula/c4tui.rb"
+            cd "$tmp/homebrew-tap"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add Formula/c4tui.rb
+            git commit -m "c4tui ${GITHUB_REF_NAME}" || exit 0
+            git push
+          else
+            gh repo create scshafe/homebrew-tap --public --description "Homebrew tap for c4tui"
+            tmp=$(mktemp -d)
+            git clone "https://x-access-token:${GH_TOKEN}@github.com/scshafe/homebrew-tap.git" "$tmp/homebrew-tap"
+            mkdir -p "$tmp/homebrew-tap/Formula"
+            cp tap/Formula/c4tui.rb "$tmp/homebrew-tap/Formula/c4tui.rb"
+            cd "$tmp/homebrew-tap"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add Formula/c4tui.rb
+            git commit -m "c4tui ${GITHUB_REF_NAME}"
+            git push
+          fi

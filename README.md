@@ -4,7 +4,31 @@ Interactive terminal viewer for Structurizr C4 diagrams. Click-to-drill navigati
 
 ## Status
 
-Pre-alpha moving toward v1. Phases 0–5 are implemented: the binary detects terminal capabilities, exports/rasterizes Structurizr SVG views, displays them with Kitty graphics, provides a keyboard view picker with per-view image caching, supports pan/zoom via Kitty source rectangles, click-to-drill navigation, reload, help, config, and file logging. See [implementation-plan.md](./implementation-plan.md) for the phased roadmap.
+Pre-alpha moving toward v1. Phases 0–6 are implemented: the binary detects terminal capabilities, exports/rasterizes Structurizr SVG views, displays them with Kitty graphics, provides a keyboard view picker with per-view image caching, supports pan/zoom via Kitty source rectangles, click-to-drill navigation, reload, help, config, and file logging. See [implementation-plan.md](./implementation-plan.md) for the phased roadmap.
+
+## Install
+
+From crates.io:
+
+```sh
+cargo install c4tui
+```
+
+From Homebrew:
+
+```sh
+brew install scshafe/tap/c4tui
+```
+
+From source:
+
+```sh
+git clone https://github.com/scshafe/c4tui.git
+cd c4tui
+cargo install --path .
+```
+
+GitHub Releases include prebuilt archives for macOS arm64, macOS amd64, Linux amd64, and Linux arm64. The release pipeline is triggered by pushing a `vMAJOR.MINOR.PATCH` tag; it builds those archives, publishes the crate with `CARGO_REGISTRY_TOKEN`, and updates `scshafe/homebrew-tap` with `HOMEBREW_TAP_TOKEN`.
 
 ## Usage
 
@@ -74,6 +98,7 @@ Sixel and iTerm2 inline-image fallbacks are explicitly out of scope for v1.
 - [architecture.md](./architecture.md) — components, data flow, technology choices
 - [implementation-plan.md](./implementation-plan.md) — phased delivery and acceptance criteria
 - [docs/c4tui.1](./docs/c4tui.1) — man page source
+- [docs/releasing.md](./docs/releasing.md) — release automation and required secrets
 
 ## License
 

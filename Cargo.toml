@@ -5,7 +5,10 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Interactive terminal viewer for Structurizr C4 diagrams"
 repository = "https://github.com/scshafe/c4tui"
+homepage = "https://github.com/scshafe/c4tui"
 readme = "README.md"
+keywords = ["c4", "structurizr", "terminal", "tui", "diagrams"]
+categories = ["command-line-utilities", "visualization"]
 
 [dependencies]
 anyhow = "1.0.100"
