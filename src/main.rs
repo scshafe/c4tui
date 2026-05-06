@@ -1,9 +1,16 @@
+use anyhow::{anyhow, bail, Context, Result};
+use base64::Engine;
 use clap::Parser;
+use resvg::{tiny_skia, usvg};
+use serde::Deserialize;
 use std::env;
 use std::fmt;
-use std::io::{self, Write};
-use std::path::PathBuf;
+use std::fs;
+use std::io::{self, IsTerminal, Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{Duration, Instant};
+use tempfile::TempDir;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about)]
@@ -15,6 +22,10 @@ struct Cli {
     /// Path to the structurizr-cli executable.
     #[arg(long)]
     structurizr_cli: Option<PathBuf>,
+
+    /// Structurizr CLI export format used to produce SVG files.
+    #[arg(long, default_value = "svg")]
+    svg_format: String,
 
     /// Timeout for terminal capability probes, in milliseconds.
     #[arg(long, default_value_t = 200)]
@@ -49,36 +60,406 @@ struct Capabilities {
     truecolor: Support,
 }
 
+#[derive(Debug)]
+struct WorkspaceSource {
+    path: PathBuf,
+}
+
+#[derive(Debug)]
+struct ExportedWorkspace {
+    _temp_dir: TempDir,
+    output_dir: PathBuf,
+    workspace_json: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+struct ViewInfo {
+    key: String,
+    name: String,
+    view_type: String,
+    svg_path: PathBuf,
+}
+
+#[derive(Debug)]
+struct RenderedView {
+    width: u32,
+    height: u32,
+    png: Vec<u8>,
+}
+
 fn main() {
+    if let Err(error) = run() {
+        eprintln!("error: {error:#}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<()> {
     let cli = Cli::parse();
-    let _workspace = cli.workspace.as_deref();
-    let _structurizr_cli = cli.structurizr_cli.as_deref();
     let timeout = Duration::from_millis(cli.capability_timeout_ms);
+    let capabilities = detect_capabilities(timeout, cli.force_probe)
+        .context("failed to detect terminal capabilities")?;
 
-    match detect_capabilities(timeout, cli.force_probe) {
-        Ok(capabilities) => {
-            println!("Kitty graphics: {}", capabilities.kitty_graphics);
-            println!("Pixel mouse: {}", capabilities.pixel_mouse);
-            println!("Truecolor: {}", capabilities.truecolor);
+    if cli.workspace.is_none() {
+        println!("Kitty graphics: {}", capabilities.kitty_graphics);
+        println!("Pixel mouse: {}", capabilities.pixel_mouse);
+        println!("Truecolor: {}", capabilities.truecolor);
 
-            if capabilities.kitty_graphics != Support::Yes {
-                eprintln!(
-                    "error: c4tui requires a terminal with Kitty graphics support (Kitty, WezTerm, or Ghostty)."
-                );
-                std::process::exit(1);
-            }
+        if capabilities.kitty_graphics != Support::Yes {
+            bail!("c4tui requires a terminal with Kitty graphics support (Kitty, WezTerm, or Ghostty)");
         }
-        Err(error) => {
-            eprintln!("error: failed to detect terminal capabilities: {error}");
-            std::process::exit(1);
+
+        return Ok(());
+    }
+
+    if capabilities.kitty_graphics != Support::Yes {
+        bail!("c4tui requires a terminal with Kitty graphics support (Kitty, WezTerm, or Ghostty)");
+    }
+
+    let workspace = resolve_workspace(cli.workspace.as_deref().expect("checked above"))?;
+    let structurizr_cli = cli
+        .structurizr_cli
+        .unwrap_or_else(|| PathBuf::from("structurizr-cli"));
+    let exported = export_workspace(&workspace, &structurizr_cli, &cli.svg_format)?;
+    let views = discover_views(&exported)?;
+    let first_view = views.first().context("no exported SVG views were found")?;
+    let rendered = render_svg(&first_view.svg_path)?;
+
+    let mut terminal = TerminalSession::enter()?;
+    terminal.display_view(first_view, &rendered)?;
+    terminal.wait_for_quit()?;
+
+    Ok(())
+}
+
+fn resolve_workspace(input: &Path) -> Result<WorkspaceSource> {
+    let path = if input.is_dir() {
+        let dsl = input.join("workspace.dsl");
+        let json = input.join("workspace.json");
+        if dsl.exists() {
+            dsl
+        } else if json.exists() {
+            json
+        } else {
+            bail!(
+                "workspace directory {} contains neither workspace.dsl nor workspace.json",
+                input.display()
+            );
+        }
+    } else {
+        input.to_path_buf()
+    };
+
+    if !path.exists() {
+        bail!("workspace file not found: {}", path.display());
+    }
+
+    Ok(WorkspaceSource { path })
+}
+
+fn export_workspace(
+    workspace: &WorkspaceSource,
+    structurizr_cli: &Path,
+    svg_format: &str,
+) -> Result<ExportedWorkspace> {
+    let temp_dir = TempDir::new().context("failed to create temporary export directory")?;
+    let output_dir = temp_dir.path().to_path_buf();
+
+    let output = Command::new(structurizr_cli)
+        .arg("export")
+        .arg("-workspace")
+        .arg(&workspace.path)
+        .arg("-format")
+        .arg(svg_format)
+        .arg("-output")
+        .arg(&output_dir)
+        .output()
+        .with_context(|| format!("failed to run {}", structurizr_cli.display()))?;
+
+    if !output.status.success() {
+        bail!(
+            "structurizr-cli export failed with status {}\n{}{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let workspace_json = find_workspace_json(&workspace.path, &output_dir);
+
+    Ok(ExportedWorkspace {
+        _temp_dir: temp_dir,
+        output_dir,
+        workspace_json,
+    })
+}
+
+fn find_workspace_json(workspace_path: &Path, output_dir: &Path) -> Option<PathBuf> {
+    let candidates = [
+        output_dir.join("workspace.json"),
+        workspace_path.with_extension("json"),
+        workspace_path.to_path_buf(),
+    ];
+
+    candidates.into_iter().find(|path| {
+        path.file_name()
+            .is_some_and(|name| name == "workspace.json")
+            && path.exists()
+    })
+}
+
+fn discover_views(exported: &ExportedWorkspace) -> Result<Vec<ViewInfo>> {
+    let mut svg_files = list_svg_files(&exported.output_dir)?;
+    svg_files.sort();
+
+    let metadata = exported
+        .workspace_json
+        .as_deref()
+        .and_then(|path| ViewMetadata::load(path).ok());
+
+    let mut views = Vec::with_capacity(svg_files.len());
+    for svg_path in svg_files {
+        let stem = svg_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("view")
+            .to_owned();
+        let meta = metadata.as_ref().and_then(|m| m.find_for_svg_stem(&stem));
+        views.push(ViewInfo {
+            key: meta.map(|m| m.key.clone()).unwrap_or_else(|| stem.clone()),
+            name: meta
+                .map(|m| m.name.clone())
+                .unwrap_or_else(|| stem.replace('_', " ")),
+            view_type: meta
+                .map(|m| m.view_type.clone())
+                .unwrap_or_else(|| "Unknown".to_owned()),
+            svg_path,
+        });
+    }
+
+    Ok(views)
+}
+
+fn list_svg_files(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut svg_files = Vec::new();
+    for entry in fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "svg") {
+            svg_files.push(path);
         }
     }
+    Ok(svg_files)
+}
+
+#[derive(Debug)]
+struct ViewMetadata {
+    views: Vec<ViewMetadataEntry>,
+}
+
+#[derive(Debug)]
+struct ViewMetadataEntry {
+    key: String,
+    name: String,
+    view_type: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct StructurizrWorkspaceJson {
+    views: Option<StructurizrViewsJson>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StructurizrViewsJson {
+    system_landscape_views: Option<Vec<StructurizrViewJson>>,
+    system_context_views: Option<Vec<StructurizrViewJson>>,
+    container_views: Option<Vec<StructurizrViewJson>>,
+    component_views: Option<Vec<StructurizrViewJson>>,
+    dynamic_views: Option<Vec<StructurizrViewJson>>,
+    deployment_views: Option<Vec<StructurizrViewJson>>,
+    filtered_views: Option<Vec<StructurizrViewJson>>,
+    custom_views: Option<Vec<StructurizrViewJson>>,
+    image_views: Option<Vec<StructurizrViewJson>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StructurizrViewJson {
+    key: Option<String>,
+    name: Option<String>,
+    title: Option<String>,
+}
+
+impl ViewMetadata {
+    fn load(path: &Path) -> Result<Self> {
+        let json = fs::read_to_string(path).with_context(|| {
+            format!("failed to read workspace metadata from {}", path.display())
+        })?;
+        let workspace: StructurizrWorkspaceJson =
+            serde_json::from_str(&json).with_context(|| {
+                format!("failed to parse workspace metadata from {}", path.display())
+            })?;
+        let Some(views) = workspace.views else {
+            return Ok(Self { views: Vec::new() });
+        };
+
+        let mut entries = Vec::new();
+        push_views(
+            &mut entries,
+            "SystemLandscape",
+            views.system_landscape_views,
+        );
+        push_views(&mut entries, "SystemContext", views.system_context_views);
+        push_views(&mut entries, "Container", views.container_views);
+        push_views(&mut entries, "Component", views.component_views);
+        push_views(&mut entries, "Dynamic", views.dynamic_views);
+        push_views(&mut entries, "Deployment", views.deployment_views);
+        push_views(&mut entries, "Filtered", views.filtered_views);
+        push_views(&mut entries, "Custom", views.custom_views);
+        push_views(&mut entries, "Image", views.image_views);
+
+        Ok(Self { views: entries })
+    }
+
+    fn find_for_svg_stem(&self, stem: &str) -> Option<&ViewMetadataEntry> {
+        let normalized_stem = normalize_view_key(stem);
+        self.views.iter().find(|view| {
+            normalize_view_key(&view.key) == normalized_stem
+                || normalize_view_key(&view.name) == normalized_stem
+        })
+    }
+}
+
+fn push_views(
+    entries: &mut Vec<ViewMetadataEntry>,
+    view_type: &str,
+    views: Option<Vec<StructurizrViewJson>>,
+) {
+    let Some(views) = views else {
+        return;
+    };
+
+    for view in views {
+        let key = view
+            .key
+            .or_else(|| view.name.clone())
+            .or_else(|| view.title.clone())
+            .unwrap_or_else(|| "view".to_owned());
+        let name = view.title.or(view.name).unwrap_or_else(|| key.clone());
+        entries.push(ViewMetadataEntry {
+            key,
+            name,
+            view_type: view_type.to_owned(),
+        });
+    }
+}
+
+fn normalize_view_key(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn render_svg(svg_path: &Path) -> Result<RenderedView> {
+    let svg =
+        fs::read(svg_path).with_context(|| format!("failed to read {}", svg_path.display()))?;
+    let options = usvg::Options::default();
+    let tree = usvg::Tree::from_data(&svg, &options)
+        .with_context(|| format!("failed to parse SVG {}", svg_path.display()))?;
+    let size = tree.size().to_int_size();
+    let mut pixmap = tiny_skia::Pixmap::new(size.width(), size.height())
+        .ok_or_else(|| anyhow!("SVG view has an invalid size"))?;
+
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::identity(),
+        &mut pixmap.as_mut(),
+    );
+    let png = encode_png(pixmap.width(), pixmap.height(), pixmap.data())?;
+
+    Ok(RenderedView {
+        width: pixmap.width(),
+        height: pixmap.height(),
+        png,
+    })
+}
+
+fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>> {
+    let mut png = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header()?;
+        writer.write_image_data(rgba)?;
+    }
+    Ok(png)
+}
+
+struct TerminalSession;
+
+impl TerminalSession {
+    fn enter() -> Result<Self> {
+        write_stdout_all(b"\x1b[?1049h\x1b[?25l")?;
+        Ok(Self)
+    }
+
+    fn display_view(&mut self, view: &ViewInfo, rendered: &RenderedView) -> Result<()> {
+        let title = format!(
+            "c4tui | {} ({}) | {} | {}x{} | press q to quit",
+            view.name, view.key, view.view_type, rendered.width, rendered.height
+        );
+        write_stdout_all(b"\x1b[2J\x1b[H")?;
+        write_stdout_all(title.as_bytes())?;
+        write_stdout_all(b"\r\n")?;
+        transmit_kitty_png(1, &rendered.png)?;
+        write_stdout_all(b"\x1b_Ga=p,i=1,p=1,q=2;\x1b\\")?;
+        Ok(())
+    }
+
+    fn wait_for_quit(&mut self) -> Result<()> {
+        let mut stdin = io::stdin();
+        let mut byte = [0_u8; 1];
+        loop {
+            stdin.read_exact(&mut byte)?;
+            if matches!(byte[0], b'q' | b'Q' | 0x03 | 0x04 | 0x1b) {
+                break;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for TerminalSession {
+    fn drop(&mut self) {
+        let _ = write_stdout_all(b"\x1b_Ga=d,i=1;\x1b\\");
+        let _ = write_stdout_all(b"\x1b[?25h\x1b[?1049l");
+    }
+}
+
+fn transmit_kitty_png(image_id: u32, png: &[u8]) -> Result<()> {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(png);
+    let mut chunks = encoded.as_bytes().chunks(4096).peekable();
+
+    while let Some(chunk) = chunks.next() {
+        let more = if chunks.peek().is_some() { 1 } else { 0 };
+        write!(
+            io::stdout().lock(),
+            "\x1b_Ga=t,f=100,t=f,i={image_id},m={more};{}\x1b\\",
+            std::str::from_utf8(chunk)?
+        )?;
+        io::stdout().flush()?;
+    }
+
+    Ok(())
 }
 
 fn detect_capabilities(timeout: Duration, force_probe: bool) -> io::Result<Capabilities> {
     let truecolor = detect_truecolor();
 
-    if !force_probe && (!stdout_is_tty() || !stdin_is_tty()) {
+    if !force_probe && (!io::stdout().is_terminal() || !io::stdin().is_terminal()) {
         return Ok(Capabilities {
             kitty_graphics: Support::Unknown,
             pixel_mouse: Support::Unknown,
@@ -143,8 +524,6 @@ impl TerminalProbeSession {
     fn query_kitty_graphics(&mut self, timeout: Duration) -> io::Result<Support> {
         self.drain_input();
 
-        // Kitty graphics protocol query: ask whether a tiny direct image transfer would be accepted.
-        // Terminals that implement the protocol answer with an APC response containing `i=31`.
         write_stdout_all(b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\")?;
         let response = self.read_until(timeout, |bytes| bytes.windows(4).any(|w| w == b"\x1b_G"));
 
@@ -154,7 +533,6 @@ impl TerminalProbeSession {
     fn query_sgr_pixel_mouse(&mut self, timeout: Duration) -> io::Result<Support> {
         self.drain_input();
 
-        // Enable SGR pixel mouse mode, then request its DEC private mode state.
         write_stdout_all(b"\x1b[?1016h\x1b[?1016$p")?;
         let response = self.read_until(timeout, |bytes| {
             let text = String::from_utf8_lossy(bytes);
@@ -223,7 +601,6 @@ fn parse_kitty_graphics_response(response: &[u8]) -> Support {
     } else if text.contains("EINVAL") || text.contains("error") || text.contains("ERROR") {
         Support::No
     } else {
-        // A structured graphics response with the requested image id is enough to prove protocol support.
         Support::Yes
     }
 }
@@ -251,14 +628,6 @@ fn write_stdout_all(bytes: &[u8]) -> io::Result<()> {
     let mut stdout = io::stdout().lock();
     stdout.write_all(bytes)?;
     stdout.flush()
-}
-
-fn stdin_is_tty() -> bool {
-    unsafe { libc::isatty(libc::STDIN_FILENO) == 1 }
-}
-
-fn stdout_is_tty() -> bool {
-    unsafe { libc::isatty(libc::STDOUT_FILENO) == 1 }
 }
 
 fn get_termios(fd: libc::c_int) -> io::Result<libc::termios> {
@@ -308,6 +677,51 @@ fn make_raw(termios: &mut libc::termios) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolves_workspace_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workspace.dsl");
+        fs::write(&path, "workspace {}\n").unwrap();
+        assert_eq!(resolve_workspace(&path).unwrap().path, path);
+    }
+
+    #[test]
+    fn prefers_dsl_over_json_in_workspace_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let dsl = dir.path().join("workspace.dsl");
+        let json = dir.path().join("workspace.json");
+        fs::write(&dsl, "workspace {}\n").unwrap();
+        fs::write(json, "{}\n").unwrap();
+        assert_eq!(resolve_workspace(dir.path()).unwrap().path, dsl);
+    }
+
+    #[test]
+    fn parses_workspace_view_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let json = dir.path().join("workspace.json");
+        fs::write(
+            &json,
+            r#"{
+              "views": {
+                "systemLandscapeViews": [{"key":"landscape", "title":"Landscape"}],
+                "containerViews": [{"key":"containers", "name":"Containers"}]
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let metadata = ViewMetadata::load(&json).unwrap();
+        assert_eq!(metadata.views.len(), 2);
+        assert_eq!(
+            metadata.find_for_svg_stem("landscape").unwrap().name,
+            "Landscape"
+        );
+        assert_eq!(
+            metadata.find_for_svg_stem("containers").unwrap().view_type,
+            "Container"
+        );
+    }
 
     #[test]
     fn parses_positive_kitty_response() {
