@@ -7,6 +7,7 @@ use anyhow::Result;
 pub struct App {
     store: ViewStore,
     current: usize,
+    breadcrumbs: Vec<usize>,
     last_drag: Option<(u16, u16)>,
 }
 
@@ -15,12 +16,13 @@ impl App {
         Self {
             store,
             current: 0,
+            breadcrumbs: Vec::new(),
             last_drag: None,
         }
     }
 
     pub fn run(&mut self, terminal: &mut TerminalSession) -> Result<()> {
-        terminal.display_view(self.current, &mut self.store)?;
+        terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
 
         loop {
             match read_key()? {
@@ -28,52 +30,71 @@ impl App {
                 Key::Char('o') | Key::Char('O') => {
                     if let Some(next) = terminal.open_view_picker(&self.store, self.current)? {
                         self.current = next;
+                        self.breadcrumbs.clear();
                     }
-                    terminal.display_view(self.current, &mut self.store)?;
+                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
+                }
+                Key::Back => {
+                    if let Some(previous) = self.breadcrumbs.pop() {
+                        self.current = previous;
+                    }
+                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
+                }
+                Key::MouseClick { x, y } => {
+                    let point = terminal.mouse_canvas_point(x, y);
+                    if let Some(child) =
+                        self.store
+                            .child_view_at_canvas_point(self.current, point.0, point.1)?
+                    {
+                        self.breadcrumbs.push(self.current);
+                        self.current = child;
+                        self.last_drag = None;
+                        terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
+                    }
                 }
                 Key::Char('+') | Key::Char('=') => {
                     self.zoom_current(1.25, (0.5, 0.5))?;
-                    terminal.display_view(self.current, &mut self.store)?;
+                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
                 }
                 Key::Char('-') | Key::Char('_') => {
                     self.zoom_current(0.8, (0.5, 0.5))?;
-                    terminal.display_view(self.current, &mut self.store)?;
+                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
                 }
                 Key::MouseWheelUp { x, y } => {
                     self.zoom_current(1.25, terminal.mouse_canvas_point(x, y))?;
-                    terminal.display_view(self.current, &mut self.store)?;
+                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
                 }
                 Key::MouseWheelDown { x, y } => {
                     self.zoom_current(0.8, terminal.mouse_canvas_point(x, y))?;
-                    terminal.display_view(self.current, &mut self.store)?;
+                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
                 }
                 Key::Char('0') | Key::Char('f') | Key::Char('F') => {
                     self.store
                         .set_transform(self.current, ViewTransform::reset());
-                    terminal.display_view(self.current, &mut self.store)?;
+                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
                 }
                 Key::Left => {
                     self.pan_current(-0.10, 0.0)?;
-                    terminal.display_view(self.current, &mut self.store)?;
+                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
                 }
                 Key::Right => {
                     self.pan_current(0.10, 0.0)?;
-                    terminal.display_view(self.current, &mut self.store)?;
+                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
                 }
                 Key::Up => {
                     self.pan_current(0.0, -0.10)?;
-                    terminal.display_view(self.current, &mut self.store)?;
+                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
                 }
                 Key::Down => {
                     self.pan_current(0.0, 0.10)?;
-                    terminal.display_view(self.current, &mut self.store)?;
+                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
                 }
                 Key::MouseDrag { x, y } => {
                     if let Some((last_x, last_y)) = self.last_drag {
                         let dx = (last_x as f32 - x as f32) / terminal.canvas_cols() as f32;
                         let dy = (last_y as f32 - y as f32) / terminal.canvas_rows() as f32;
                         self.pan_current(dx, dy)?;
-                        terminal.display_view(self.current, &mut self.store)?;
+                        terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
                     }
                     self.last_drag = Some((x, y));
                 }

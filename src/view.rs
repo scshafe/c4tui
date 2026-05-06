@@ -47,6 +47,38 @@ impl ViewStore {
     pub fn set_transform(&mut self, index: usize, transform: ViewTransform) {
         self.transforms.insert(index, transform);
     }
+
+    pub fn child_view_at_canvas_point(
+        &mut self,
+        index: usize,
+        canvas_x: f32,
+        canvas_y: f32,
+    ) -> Result<Option<usize>> {
+        let (width, height) = {
+            let rendered = self.rendered_view(index)?;
+            (rendered.width, rendered.height)
+        };
+        let rect = self.transform(index).source_rect(width, height);
+        let image_x = rect.x as f32 + rect.width as f32 * canvas_x.clamp(0.0, 1.0);
+        let image_y = rect.y as f32 + rect.height as f32 * canvas_y.clamp(0.0, 1.0);
+
+        let hit_element = self
+            .rendered_view(index)?
+            .bboxes
+            .iter()
+            .filter(|bbox| bbox.contains(image_x, image_y))
+            .min_by(|left, right| left.area().total_cmp(&right.area()))
+            .map(|bbox| bbox.element_id.clone());
+
+        let Some(hit_element) = hit_element else {
+            return Ok(None);
+        };
+        let Some(child_key) = self.views[index].child_view_by_element_id.get(&hit_element) else {
+            return Ok(None);
+        };
+
+        Ok(self.views.iter().position(|view| &view.key == child_key))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -168,6 +200,8 @@ mod tests {
             name: "Landscape".to_owned(),
             view_type: "SystemLandscape".to_owned(),
             svg_path: svg,
+            element_ids: std::collections::HashSet::new(),
+            child_view_by_element_id: std::collections::HashMap::new(),
         }])
         .unwrap();
 
@@ -178,6 +212,46 @@ mod tests {
     #[test]
     fn rejects_empty_view_store() {
         assert!(ViewStore::new(Vec::new()).is_err());
+    }
+
+    #[test]
+    fn hit_tests_child_view_at_canvas_point() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent_svg = dir.path().join("parent.svg");
+        let child_svg = dir.path().join("child.svg");
+        fs::write(
+            &parent_svg,
+            r#"<svg width="100" height="100"><g id="1"><rect x="10" y="10" width="40" height="40"/></g></svg>"#,
+        )
+        .unwrap();
+        fs::write(&child_svg, r#"<svg width="100" height="100" />"#).unwrap();
+        let mut child_view_by_element_id = std::collections::HashMap::new();
+        child_view_by_element_id.insert("1".to_owned(), "child".to_owned());
+        let mut store = ViewStore::new(vec![
+            ViewInfo {
+                key: "parent".to_owned(),
+                name: "Parent".to_owned(),
+                view_type: "SystemContext".to_owned(),
+                svg_path: parent_svg,
+                element_ids: std::collections::HashSet::from(["1".to_owned()]),
+                child_view_by_element_id,
+            },
+            ViewInfo {
+                key: "child".to_owned(),
+                name: "Child".to_owned(),
+                view_type: "Container".to_owned(),
+                svg_path: child_svg,
+                element_ids: std::collections::HashSet::new(),
+                child_view_by_element_id: std::collections::HashMap::new(),
+            },
+        ])
+        .unwrap();
+
+        assert_eq!(
+            store.child_view_at_canvas_point(0, 0.2, 0.2).unwrap(),
+            Some(1)
+        );
+        assert_eq!(store.child_view_at_canvas_point(0, 0.8, 0.8).unwrap(), None);
     }
 
     #[test]

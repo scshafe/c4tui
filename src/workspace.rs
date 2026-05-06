@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -23,6 +24,8 @@ pub struct ViewInfo {
     pub name: String,
     pub view_type: String,
     pub svg_path: PathBuf,
+    pub element_ids: HashSet<String>,
+    pub child_view_by_element_id: HashMap<String, String>,
 }
 
 pub fn resolve_workspace(input: &Path) -> Result<WorkspaceSource> {
@@ -127,10 +130,54 @@ pub fn discover_views(exported: &ExportedWorkspace) -> Result<Vec<ViewInfo>> {
                 .map(|m| m.view_type.clone())
                 .unwrap_or_else(|| "Unknown".to_owned()),
             svg_path,
+            element_ids: meta.map(|m| m.element_ids.clone()).unwrap_or_default(),
+            child_view_by_element_id: HashMap::new(),
         });
     }
 
+    wire_child_views(&mut views, metadata.as_ref());
+
     Ok(views)
+}
+
+fn wire_child_views(views: &mut [ViewInfo], metadata: Option<&ViewMetadata>) {
+    let Some(metadata) = metadata else {
+        return;
+    };
+
+    let view_key_to_index = views
+        .iter()
+        .enumerate()
+        .map(|(index, view)| (normalize_view_key(&view.key), index))
+        .collect::<HashMap<_, _>>();
+
+    let mut child_specs = Vec::new();
+    for entry in &metadata.views {
+        if let Some(parent_element_id) = &entry.parent_element_id {
+            if let Some(child_index) = view_key_to_index.get(&normalize_view_key(&entry.key)) {
+                child_specs.push((parent_element_id.clone(), *child_index));
+            }
+        }
+    }
+
+    for (parent_element_id, child_index) in child_specs {
+        let child_key = views[child_index].key.clone();
+        let parent_indices = views
+            .iter()
+            .enumerate()
+            .filter_map(|(parent_index, parent_view)| {
+                (parent_index != child_index
+                    && parent_view.element_ids.contains(&parent_element_id))
+                .then_some(parent_index)
+            })
+            .collect::<Vec<_>>();
+        for parent_index in parent_indices {
+            views[parent_index]
+                .child_view_by_element_id
+                .entry(parent_element_id.clone())
+                .or_insert_with(|| child_key.clone());
+        }
+    }
 }
 
 fn list_svg_files(dir: &Path) -> Result<Vec<PathBuf>> {
@@ -155,6 +202,8 @@ struct ViewMetadataEntry {
     key: String,
     name: String,
     view_type: String,
+    element_ids: HashSet<String>,
+    parent_element_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -181,6 +230,19 @@ struct StructurizrViewJson {
     key: Option<String>,
     name: Option<String>,
     title: Option<String>,
+    #[serde(default)]
+    elements: Vec<StructurizrViewElementJson>,
+    #[serde(default, rename = "softwareSystemId")]
+    software_system_id: Option<String>,
+    #[serde(default, rename = "containerId")]
+    container_id: Option<String>,
+    #[serde(default, rename = "componentId")]
+    component_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StructurizrViewElementJson {
+    id: String,
 }
 
 impl ViewMetadata {
@@ -239,10 +301,22 @@ fn push_views(
             .or_else(|| view.title.clone())
             .unwrap_or_else(|| "view".to_owned());
         let name = view.title.or(view.name).unwrap_or_else(|| key.clone());
+        let parent_element_id = view
+            .container_id
+            .clone()
+            .or_else(|| view.component_id.clone())
+            .or_else(|| view.software_system_id.clone());
+        let element_ids = view
+            .elements
+            .into_iter()
+            .map(|element| element.id)
+            .collect();
         entries.push(ViewMetadataEntry {
             key,
             name,
             view_type: view_type.to_owned(),
+            element_ids,
+            parent_element_id,
         });
     }
 }
@@ -301,6 +375,38 @@ mod tests {
         assert_eq!(
             metadata.find_for_svg_stem("containers").unwrap().view_type,
             "Container"
+        );
+    }
+
+    #[test]
+    fn wires_child_views_from_workspace_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let json = dir.path().join("workspace.json");
+        fs::write(
+            &json,
+            r#"{
+              "views": {
+                "systemLandscapeViews": [{"key":"landscape", "elements":[{"id":"1"}]}],
+                "systemContextViews": [{"key":"system", "softwareSystemId":"1", "elements":[{"id":"2"}]}],
+                "containerViews": [{"key":"containers", "softwareSystemId":"1", "elements":[{"id":"2"}]}]
+              }
+            }"#,
+        )
+        .unwrap();
+        fs::write(dir.path().join("landscape.svg"), "<svg />").unwrap();
+        fs::write(dir.path().join("system.svg"), "<svg />").unwrap();
+        fs::write(dir.path().join("containers.svg"), "<svg />").unwrap();
+
+        let exported = ExportedWorkspace {
+            _temp_dir: tempfile::tempdir().unwrap(),
+            output_dir: dir.path().to_path_buf(),
+            workspace_json: Some(json),
+        };
+        let views = discover_views(&exported).unwrap();
+        let landscape = views.iter().find(|view| view.key == "landscape").unwrap();
+        assert_eq!(
+            landscape.child_view_by_element_id.get("1"),
+            Some(&"system".to_owned())
         );
     }
 }

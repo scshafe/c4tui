@@ -38,7 +38,12 @@ impl TerminalSession {
         })
     }
 
-    pub fn display_view(&mut self, index: usize, store: &mut ViewStore) -> Result<()> {
+    pub fn display_view(
+        &mut self,
+        index: usize,
+        breadcrumbs: &[usize],
+        store: &mut ViewStore,
+    ) -> Result<()> {
         let image_id = image_id_for_view(index);
         let view = store.view(index).clone();
         let (width, height) = {
@@ -52,9 +57,12 @@ impl TerminalSession {
 
         let transform = store.transform(index);
         let rect = transform.source_rect(width, height);
+        let breadcrumb = format_breadcrumb(store, breadcrumbs, index);
         let title = format!(
-            "c4tui | {} ({}) | {} | zoom {:.0}% | arrows pan | +/- zoom | 0/f fit | o views | q quit",
-            view.name, view.key, view.view_type, transform.scale * 100.0
+            "c4tui | {} | {} | zoom {:.0}% | click drill | Backspace back | o views | q quit",
+            breadcrumb,
+            view.view_type,
+            transform.scale * 100.0
         );
         write_stdout_all(b"\x1b[2J\x1b[H")?;
         write_stdout_all(title.as_bytes())?;
@@ -137,6 +145,16 @@ impl Drop for TerminalSession {
         let _ = set_fd_flags(libc::STDIN_FILENO, self.original_flags);
         let _ = set_termios(libc::STDIN_FILENO, &self.original_termios);
     }
+}
+
+fn format_breadcrumb(store: &ViewStore, breadcrumbs: &[usize], current: usize) -> String {
+    breadcrumbs
+        .iter()
+        .copied()
+        .chain(std::iter::once(current))
+        .map(|index| store.view(index).name.as_str())
+        .collect::<Vec<_>>()
+        .join(" > ")
 }
 
 fn transmit_kitty_png(image_id: u32, png: &[u8]) -> Result<()> {

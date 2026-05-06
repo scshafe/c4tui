@@ -10,8 +10,10 @@ pub enum Key {
     Left,
     Right,
     Enter,
+    Back,
     Esc,
     CtrlC,
+    MouseClick { x: u16, y: u16 },
     MouseWheelUp { x: u16, y: u16 },
     MouseWheelDown { x: u16, y: u16 },
     MouseDrag { x: u16, y: u16 },
@@ -24,6 +26,7 @@ pub fn read_key() -> Result<Key> {
 
     Ok(match byte {
         b'\r' | b'\n' => Key::Enter,
+        0x7f | 0x08 => Key::Back,
         0x03 => Key::CtrlC,
         0x1b => parse_escape_sequence()?,
         byte if byte.is_ascii() && !byte.is_ascii_control() => Key::Char(byte as char),
@@ -101,6 +104,7 @@ fn parse_sgr_mouse(bytes: &[u8]) -> Option<Key> {
     }
 
     match code {
+        0 => Some(Key::MouseClick { x, y }),
         64 => Some(Key::MouseWheelUp { x, y }),
         65 => Some(Key::MouseWheelDown { x, y }),
         32..=63 => Some(Key::MouseDrag { x, y }),
@@ -114,6 +118,10 @@ mod tests {
 
     #[test]
     fn parses_sgr_mouse_wheel_and_drag() {
+        assert_eq!(
+            parse_sgr_mouse(b"[<0;10;20M"),
+            Some(Key::MouseClick { x: 10, y: 20 })
+        );
         assert_eq!(
             parse_sgr_mouse(b"[<64;10;20M"),
             Some(Key::MouseWheelUp { x: 10, y: 20 })

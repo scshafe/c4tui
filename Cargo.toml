@@ -14,6 +14,7 @@ clap = { version = "4.5.21", features = ["derive"] }
 libc = "0.2.161"
 png = "0.18.0"
 resvg = "0.45.1"
+roxmltree = "0.20.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 tempfile = "3.14.0"
