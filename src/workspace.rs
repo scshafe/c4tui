@@ -1,3 +1,4 @@
+use crate::ids::ElementId;
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
@@ -24,8 +25,8 @@ pub struct ViewInfo {
     pub name: String,
     pub view_type: String,
     pub svg_path: PathBuf,
-    pub element_ids: HashSet<String>,
-    pub child_view_by_element_id: HashMap<String, String>,
+    pub element_ids: HashSet<ElementId>,
+    pub child_view_by_element_id: HashMap<ElementId, String>,
 }
 
 pub fn resolve_workspace(input: &Path) -> Result<WorkspaceSource> {
@@ -202,8 +203,8 @@ struct ViewMetadataEntry {
     key: String,
     name: String,
     view_type: String,
-    element_ids: HashSet<String>,
-    parent_element_id: Option<String>,
+    element_ids: HashSet<ElementId>,
+    parent_element_id: Option<ElementId>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -305,11 +306,12 @@ fn push_views(
             .container_id
             .clone()
             .or_else(|| view.component_id.clone())
-            .or_else(|| view.software_system_id.clone());
+            .or_else(|| view.software_system_id.clone())
+            .map(ElementId::new);
         let element_ids = view
             .elements
             .into_iter()
-            .map(|element| element.id)
+            .map(|element| ElementId::new(element.id))
             .collect();
         entries.push(ViewMetadataEntry {
             key,

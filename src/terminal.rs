@@ -1,4 +1,5 @@
 use crate::config::KeyBindings;
+use crate::ids::ViewId;
 use crate::input::{read_key, Key};
 use crate::tty::{
     get_fd_flags, get_termios, make_raw, set_fd_flags, set_termios, terminal_size, write_stdout_all,
@@ -41,8 +42,8 @@ impl TerminalSession {
 
     pub fn display_view(
         &mut self,
-        index: usize,
-        breadcrumbs: &[usize],
+        index: ViewId,
+        breadcrumbs: &[ViewId],
         store: &mut ViewStore,
     ) -> Result<()> {
         let image_id = image_id_for_view(index);
@@ -97,16 +98,20 @@ impl TerminalSession {
         )
     }
 
-    pub fn open_view_picker(&mut self, store: &ViewStore, current: usize) -> Result<Option<usize>> {
+    pub fn open_view_picker(
+        &mut self,
+        store: &ViewStore,
+        current: ViewId,
+    ) -> Result<Option<ViewId>> {
         let mut selected = current;
         loop {
             self.draw_view_picker(store, selected)?;
             match read_key()? {
                 Key::Up => {
-                    selected = selected.saturating_sub(1);
+                    selected = ViewId::new(selected.index().saturating_sub(1));
                 }
                 Key::Down => {
-                    selected = (selected + 1).min(store.len() - 1);
+                    selected = ViewId::new((selected.index() + 1).min(store.len() - 1));
                 }
                 Key::Enter => return Ok(Some(selected)),
                 Key::Esc | Key::Char('q') | Key::Char('Q') => return Ok(None),
@@ -163,12 +168,16 @@ impl TerminalSession {
         Ok(())
     }
 
-    fn draw_view_picker(&mut self, store: &ViewStore, selected: usize) -> Result<()> {
+    fn draw_view_picker(&mut self, store: &ViewStore, selected: ViewId) -> Result<()> {
         write_stdout_all(b"\x1b[2J\x1b[H")?;
         write_stdout_all(b"Select a view (Up/Down, Enter, Esc)\r\n\r\n")?;
 
         for (index, view) in store.views.iter().enumerate() {
-            let marker = if index == selected { ">" } else { " " };
+            let marker = if ViewId::new(index) == selected {
+                ">"
+            } else {
+                " "
+            };
             writeln!(
                 io::stdout().lock(),
                 "{marker} {} ({}) [{}]\r",
@@ -196,7 +205,7 @@ impl Drop for TerminalSession {
     }
 }
 
-fn format_breadcrumb(store: &ViewStore, breadcrumbs: &[usize], current: usize) -> String {
+fn format_breadcrumb(store: &ViewStore, breadcrumbs: &[ViewId], current: ViewId) -> String {
     breadcrumbs
         .iter()
         .copied()

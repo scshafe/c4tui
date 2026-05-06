@@ -1,3 +1,4 @@
+use crate::ids::ElementId;
 use anyhow::{anyhow, Context, Result};
 use resvg::{tiny_skia, usvg};
 use std::fs;
@@ -13,7 +14,7 @@ pub struct RenderedView {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ElementBBox {
-    pub element_id: String,
+    pub element_id: ElementId,
     pub x: f32,
     pub y: f32,
     pub width: f32,
@@ -86,7 +87,7 @@ fn extract_element_bboxes(svg: &[u8], scale: f32) -> Vec<ElementBBox> {
         };
         if let Some((x1, y1, x2, y2)) = descendant_bbox(node) {
             bboxes.push(ElementBBox {
-                element_id: element_id.to_owned(),
+                element_id: ElementId::new(element_id),
                 x: x1 * scale,
                 y: y1 * scale,
                 width: (x2 - x1).max(0.0) * scale,
@@ -186,7 +187,7 @@ mod tests {
         let svg = br#"<svg><g id="1" transform="translate(10, 20)"><rect x="5" y="6" width="100" height="50"/></g></svg>"#;
         let bboxes = extract_element_bboxes(svg, 1.0);
         assert_eq!(bboxes.len(), 1);
-        assert_eq!(bboxes[0].element_id, "1");
+        assert_eq!(bboxes[0].element_id, ElementId::new("1"));
         assert_eq!(bboxes[0].x, 15.0);
         assert_eq!(bboxes[0].y, 26.0);
         assert_eq!(bboxes[0].width, 100.0);

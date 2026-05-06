@@ -2,6 +2,7 @@ mod app;
 mod capabilities;
 mod cli;
 mod config;
+mod ids;
 mod input;
 mod render;
 mod terminal;

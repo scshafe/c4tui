@@ -99,6 +99,7 @@ Sixel and iTerm2 inline-image fallbacks are explicitly out of scope for v1.
 - [implementation-plan.md](./implementation-plan.md) — phased delivery and acceptance criteria
 - [docs/c4tui.1](./docs/c4tui.1) — man page source
 - [docs/releasing.md](./docs/releasing.md) — release automation and required secrets
+- [docs/architecture-redesign-plan.md](./docs/architecture-redesign-plan.md) — planned architecture hardening pass
 
 ## License
 

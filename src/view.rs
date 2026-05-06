@@ -1,3 +1,4 @@
+use crate::ids::ViewId;
 use crate::render::{render_svg, RenderedView};
 use crate::workspace::{ExportedWorkspace, ViewInfo};
 use anyhow::{bail, Result};
@@ -6,8 +7,8 @@ use std::collections::HashMap;
 #[derive(Debug)]
 pub struct ViewStore {
     pub views: Vec<ViewInfo>,
-    rendered: HashMap<usize, RenderedView>,
-    transforms: HashMap<usize, ViewTransform>,
+    rendered: HashMap<ViewId, RenderedView>,
+    transforms: HashMap<ViewId, ViewTransform>,
     dpi_scale: f32,
     _export: Option<ExportedWorkspace>,
 }
@@ -36,43 +37,43 @@ impl ViewStore {
         self.views.len()
     }
 
-    pub fn view(&self, index: usize) -> &ViewInfo {
-        &self.views[index]
+    pub fn view(&self, id: ViewId) -> &ViewInfo {
+        &self.views[id.index()]
     }
 
-    pub fn rendered_view(&mut self, index: usize) -> Result<&RenderedView> {
-        if !self.rendered.contains_key(&index) {
-            let rendered = render_svg(&self.views[index].svg_path, self.dpi_scale)?;
-            self.rendered.insert(index, rendered);
+    pub fn rendered_view(&mut self, id: ViewId) -> Result<&RenderedView> {
+        if !self.rendered.contains_key(&id) {
+            let rendered = render_svg(&self.views[id.index()].svg_path, self.dpi_scale)?;
+            self.rendered.insert(id, rendered);
         }
 
-        Ok(self.rendered.get(&index).expect("rendered view inserted"))
+        Ok(self.rendered.get(&id).expect("rendered view inserted"))
     }
 
-    pub fn transform(&self, index: usize) -> ViewTransform {
-        self.transforms.get(&index).copied().unwrap_or_default()
+    pub fn transform(&self, id: ViewId) -> ViewTransform {
+        self.transforms.get(&id).copied().unwrap_or_default()
     }
 
-    pub fn set_transform(&mut self, index: usize, transform: ViewTransform) {
-        self.transforms.insert(index, transform);
+    pub fn set_transform(&mut self, id: ViewId, transform: ViewTransform) {
+        self.transforms.insert(id, transform);
     }
 
     pub fn child_view_at_canvas_point(
         &mut self,
-        index: usize,
+        id: ViewId,
         canvas_x: f32,
         canvas_y: f32,
-    ) -> Result<Option<usize>> {
+    ) -> Result<Option<ViewId>> {
         let (width, height) = {
-            let rendered = self.rendered_view(index)?;
+            let rendered = self.rendered_view(id)?;
             (rendered.width, rendered.height)
         };
-        let rect = self.transform(index).source_rect(width, height);
+        let rect = self.transform(id).source_rect(width, height);
         let image_x = rect.x as f32 + rect.width as f32 * canvas_x.clamp(0.0, 1.0);
         let image_y = rect.y as f32 + rect.height as f32 * canvas_y.clamp(0.0, 1.0);
 
         let hit_element = self
-            .rendered_view(index)?
+            .rendered_view(id)?
             .bboxes
             .iter()
             .filter(|bbox| bbox.contains(image_x, image_y))
@@ -82,11 +83,18 @@ impl ViewStore {
         let Some(hit_element) = hit_element else {
             return Ok(None);
         };
-        let Some(child_key) = self.views[index].child_view_by_element_id.get(&hit_element) else {
+        let Some(child_key) = self.views[id.index()]
+            .child_view_by_element_id
+            .get(&hit_element)
+        else {
             return Ok(None);
         };
 
-        Ok(self.views.iter().position(|view| &view.key == child_key))
+        Ok(self
+            .views
+            .iter()
+            .position(|view| &view.key == child_key)
+            .map(ViewId::new))
     }
 }
 
@@ -190,8 +198,8 @@ pub struct SourceRect {
     pub height: u32,
 }
 
-pub fn image_id_for_view(index: usize) -> u32 {
-    (index as u32) + 1
+pub fn image_id_for_view(id: ViewId) -> u32 {
+    (id.index() as u32) + 1
 }
 
 #[cfg(test)]
@@ -218,7 +226,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(store.len(), 1);
-        assert_eq!(image_id_for_view(0), 1);
+        assert_eq!(image_id_for_view(ViewId::first()), 1);
     }
 
     #[test]
@@ -238,7 +246,7 @@ mod tests {
         .unwrap();
         fs::write(&child_svg, r#"<svg width="100" height="100" />"#).unwrap();
         let mut child_view_by_element_id = std::collections::HashMap::new();
-        child_view_by_element_id.insert("1".to_owned(), "child".to_owned());
+        child_view_by_element_id.insert(crate::ids::ElementId::new("1"), "child".to_owned());
         let mut store = ViewStore::new(
             vec![
                 ViewInfo {
@@ -246,7 +254,7 @@ mod tests {
                     name: "Parent".to_owned(),
                     view_type: "SystemContext".to_owned(),
                     svg_path: parent_svg,
-                    element_ids: std::collections::HashSet::from(["1".to_owned()]),
+                    element_ids: std::collections::HashSet::from([crate::ids::ElementId::new("1")]),
                     child_view_by_element_id,
                 },
                 ViewInfo {
@@ -263,10 +271,17 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            store.child_view_at_canvas_point(0, 0.2, 0.2).unwrap(),
-            Some(1)
+            store
+                .child_view_at_canvas_point(ViewId::first(), 0.2, 0.2)
+                .unwrap(),
+            Some(ViewId::new(1))
         );
-        assert_eq!(store.child_view_at_canvas_point(0, 0.8, 0.8).unwrap(), None);
+        assert_eq!(
+            store
+                .child_view_at_canvas_point(ViewId::first(), 0.8, 0.8)
+                .unwrap(),
+            None
+        );
     }
 
     #[test]

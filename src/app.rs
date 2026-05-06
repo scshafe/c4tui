@@ -1,3 +1,4 @@
+use crate::ids::ViewId;
 use crate::input::{read_key, Key};
 use crate::terminal::TerminalSession;
 use crate::view::{ViewStore, ViewTransform};
@@ -12,8 +13,8 @@ use std::path::PathBuf;
 #[derive(Debug)]
 pub struct App {
     store: ViewStore,
-    current: usize,
-    breadcrumbs: Vec<usize>,
+    current: ViewId,
+    breadcrumbs: Vec<ViewId>,
     last_drag: Option<(u16, u16)>,
     workspace: WorkspaceSource,
     structurizr_cli: PathBuf,
@@ -31,7 +32,7 @@ impl App {
     ) -> Self {
         Self {
             store,
-            current: 0,
+            current: ViewId::first(),
             breadcrumbs: Vec::new(),
             last_drag: None,
             workspace,
@@ -164,7 +165,7 @@ impl App {
         let exported = export_workspace(&self.workspace, &self.structurizr_cli, &self.svg_format)?;
         let views = discover_views(&exported)?;
         self.store = ViewStore::new(views, self.config.dpi_scale)?.with_export(exported);
-        self.current = 0;
+        self.current = ViewId::first();
         self.breadcrumbs.clear();
         self.last_drag = None;
         Ok(())
