@@ -4,7 +4,15 @@ Interactive terminal viewer for Structurizr C4 diagrams. Click-to-drill navigati
 
 ## Status
 
-Pre-alpha. The repository currently contains specification, architecture, and implementation plan only — no code yet. See [implementation-plan.md](./implementation-plan.md) for the phased roadmap.
+Pre-alpha. Phase 0 is implemented: the binary provides a CLI scaffold and terminal capability detection for Kitty graphics, SGR pixel mouse mode, and truecolor. See [implementation-plan.md](./implementation-plan.md) for the phased roadmap.
+
+## Usage
+
+```sh
+cargo run -- --workspace ./workspace.dsl
+```
+
+The Phase 0 binary only probes terminal capabilities and exits. It returns non-zero when Kitty graphics support is unavailable, because later phases require inline image rendering.
 
 ## What it does (intended)
 

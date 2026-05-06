@@ -1,0 +1,15 @@
+[package]
+name = "c4tui"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Interactive terminal viewer for Structurizr C4 diagrams"
+repository = "https://github.com/scshafe/c4tui"
+readme = "README.md"
+
+[dependencies]
+clap = { version = "4.5.21", features = ["derive"] }
+libc = "0.2.161"
+
+[dev-dependencies]
+tempfile = "3.14.0"
