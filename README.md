@@ -4,7 +4,7 @@ Interactive terminal viewer for Structurizr C4 diagrams. Click-to-drill navigati
 
 ## Status
 
-Pre-alpha moving toward v1. Phases 0–6 are implemented: the binary detects terminal capabilities, exports/rasterizes Structurizr SVG views, displays them with Kitty graphics, provides a keyboard view picker with per-view image caching, supports pan/zoom via Kitty source rectangles, click-to-drill navigation, reload, help, config, and file logging. See [implementation-plan.md](./implementation-plan.md) for the phased roadmap.
+Pre-alpha moving toward v1. Phases 0–6 are implemented, and the architecture hardening pass is complete: the binary detects terminal capabilities, exports/rasterizes Structurizr SVG views, displays them with Kitty graphics, provides a keyboard view picker with per-view image caching, supports pan/zoom via Kitty source rectangles, click-to-drill navigation, reload, help, config, and file logging. See [implementation-plan.md](./implementation-plan.md) for the phased roadmap.
 
 ## Install
 
@@ -99,7 +99,7 @@ Sixel and iTerm2 inline-image fallbacks are explicitly out of scope for v1.
 - [implementation-plan.md](./implementation-plan.md) — phased delivery and acceptance criteria
 - [docs/c4tui.1](./docs/c4tui.1) — man page source
 - [docs/releasing.md](./docs/releasing.md) — release automation and required secrets
-- [docs/architecture-redesign-plan.md](./docs/architecture-redesign-plan.md) — planned architecture hardening pass
+- [docs/architecture-redesign-plan.md](./docs/architecture-redesign-plan.md) — completed architecture hardening pass
 
 ## License
 

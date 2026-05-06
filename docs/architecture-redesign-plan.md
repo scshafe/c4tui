@@ -1,5 +1,7 @@
 # c4tui architecture redesign plan
 
+Status: complete. Phases A–E have been implemented; this document is retained as the design record for the hardening pass.
+
 This plan describes the next architecture pass before using c4tui heavily. The goal is not to change user-visible behavior; it is to make the app easier to extend, test, and harden.
 
 ## Goals

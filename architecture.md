@@ -4,163 +4,193 @@ This document describes *how* c4tui is built. The *what* lives in [specification
 
 ## 1. Overview
 
-c4tui is a single-process Rust application. At runtime it owns three concurrent concerns:
+c4tui is a single-process Rust CLI with a small explicit update loop:
 
-1. **Workspace pipeline** — load DSL/JSON, invoke Structurizr CLI, produce per-view SVG, parse to (raster + hit-test map).
-2. **Terminal session** — own the alternate screen, image registry, input parser, redraw loop.
-3. **Navigation state** — current view, breadcrumb stack, pan/zoom transform per view, modal UI state.
+```text
+raw terminal bytes
+      │
+      ▼
+input parser → InputEvent → Command → AppState::apply
+                                      │
+                                      ├── Effect  ──► terminal / workspace side effect
+                                      │
+                                      ▼
+                                 RenderFrame ──► TerminalBackend
+```
 
-These three are connected by an internal event channel.
+The split keeps most application behavior testable without a real terminal:
+
+- `event.rs` maps semantic input into app commands.
+- `state.rs` owns navigation, pan/zoom transforms, update results, effects, and render-frame production.
+- `app.rs` is the orchestration shell: read input, map command, apply state, perform side effects, render.
+- `backend.rs` defines the terminal boundary used by both the real terminal session and tests.
 
 ## 2. Components
 
 ### 2.1 Workspace loader
 
-- Accepts a path to `workspace.dsl`, `workspace.json`, or a directory containing one.
-- Invokes `structurizr-cli` as a subprocess to export each view as **SVG**.
-- Parses `workspace.json` (either user-provided or generated as a side-effect of export) to learn:
-  - The list of views, names, and types (Landscape, SystemContext, Container, Component, Deployment, etc.).
-  - The element-to-child-view mapping — for each element in each view, the view (if any) that drills into it.
+The workspace pipeline accepts a path to `workspace.dsl`, `workspace.json`, or a directory containing one. When interactive viewing starts it invokes `structurizr-cli` as a subprocess to export SVG views and then parses `workspace.json` to learn:
+
+- view keys, names, and types;
+- element IDs present in each view;
+- child-view relationships used for click-to-drill navigation.
+
+Reload is modeled as an app effect. `Command::Reload` requests `Effect::ReloadWorkspace`; the app shell performs the subprocess/file I/O, then feeds success or failure back into `AppState`.
 
 ### 2.2 SVG processor
 
-For each exported SVG:
+For each exported SVG, `render.rs` parses once with `usvg::Tree` and uses that same tree for both geometry and rasterization:
 
-1. Parse with `usvg` (resvg's permissive front-end).
-2. Walk the tree, extracting `(element_id, bounding_box_svg_coords)` for every group whose `id` corresponds to a Structurizr element.
-3. Rasterize at the configured DPI multiplier (default 4×) into an RGBA buffer using `resvg`.
-4. Compute and persist the affine transform between SVG coordinates and raster pixel coordinates.
+1. Walk `usvg` groups with non-empty IDs.
+2. Use each group's computed absolute bounding box for hit testing.
+3. Rasterize with `resvg`/`tiny-skia` at the configured DPI multiplier.
+4. Encode the pixmap as PNG for Kitty image transmission.
 
-The bbox map stays in SVG coordinates. Pan/zoom changes the SVG-to-screen transform, not the source data.
+Using `usvg` geometry avoids hand-parsing SVG XML attributes and correctly handles nested transforms, scale, rotation, paths, images, text, and other shapes that `usvg` resolves.
 
 ### 2.3 View store
 
-In-memory, populated lazily as views are first visited:
+`ViewStore` owns view metadata, lazy rendered-view caches, and per-view transforms. Public boundaries use typed IDs:
 
-```
-ViewId → {
+```text
+ViewId → ViewInfo {
+    key: String,
     name: String,
-    view_type: ViewType,
-    raster: Arc<RgbaImage>,
-    bboxes: Vec<(ElementId, BBoxSvg)>,
-    child_view_for_element: HashMap<ElementId, ViewId>,
-    svg_to_raster: Affine,
+    view_type: String,
+    svg_path: PathBuf,
+    element_ids: HashSet<ElementId>,
+    child_view_by_element_id: HashMap<ElementId, ViewId>,
 }
-```
 
-Rasters are reused across navigation; only the SVG-to-screen transform changes during pan/zoom.
-
-### 2.4 Terminal renderer
-
-Owns the Kitty graphics image registry. Each view's raster is transmitted once with a stable image ID. Subsequent display commands specify the source rectangle and scale, driving pan/zoom without retransmission.
-
-Layout responsibilities:
-
-- Reserve a top status bar (one cell).
-- Reserve a bottom command/help bar (one to two cells).
-- The remaining area is the image canvas.
-- View picker and other modals draw as cell-glyph overlays above the image (Kitty Z-index).
-
-### 2.5 Input handler
-
-Parses CSI sequences from stdin:
-
-- Keyboard events (Kitty keyboard protocol if negotiated, otherwise xterm-style).
-- Mouse events in SGR pixel mode (CSI ?1016).
-
-Translates raw events into semantic events: `NavigateChild { element_id }`, `PanBy { dx, dy }`, `ZoomBy { factor }`, `OpenViewPicker`, `Back`, `Reload`, `Quit`.
-
-### 2.6 Navigation state
-
-```
-NavState = {
-    current: ViewId,
-    breadcrumbs: Vec<ViewId>,
-    transforms: HashMap<ViewId, ViewTransform>,
-    modal: Option<Modal>,   // ViewPicker, ErrorDialog, Help
+ViewId → RenderedView {
+    width: u32,
+    height: u32,
+    png: Vec<u8>,
+    bboxes: Vec<ElementBBox>,
 }
+
+ViewId → ViewTransform
 ```
 
-Transitions:
+Rasters are reused across navigation; pan/zoom changes the source rectangle displayed from the same cached image.
 
-- `Click(px, py)` resolves to a hit element. If the element has a child view: push current onto breadcrumbs, set current to child.
-- `Back`: pop breadcrumbs into current.
-- View picker selection: set current to chosen view, clear breadcrumbs.
+### 2.4 App state and commands
+
+`AppState` contains:
+
+- current `ViewId`;
+- breadcrumb stack;
+- last drag point;
+- per-view pan/zoom state stored in `ViewStore`.
+
+`Command` values represent user intent: quit, open picker, select view, back, reload, help, drill by canvas point, zoom, pan, drag, and reset/fit. `AppState::apply(command, store)` mutates state and returns an `UpdateResult` containing:
+
+- whether a render is needed;
+- an optional `Effect` for imperative work such as quit, help, picker, reload, or image-cache clearing.
+
+`RenderFrame` is the declarative render input: current view, breadcrumbs, and the current view transform.
+
+### 2.5 Terminal backend
+
+`TerminalBackend` is the imperative boundary:
+
+- report terminal/canvas size;
+- read `InputEvent`;
+- render a `RenderFrame`;
+- open picker/help/error/message dialogs;
+- clear terminal image cache.
+
+`TerminalSession` implements the trait for the real TTY. Tests use `FakeTerminalBackend` to script input and assert rendered frames/dialog effects without raw mode or a terminal emulator.
+
+The concrete terminal session owns:
+
+- alternate screen and raw mode cleanup;
+- Kitty graphics image registry;
+- SGR pixel mouse setup;
+- image placement and source-rectangle updates;
+- status/help/picker overlays.
+
+### 2.6 Input handling
+
+`input.rs` parses raw keyboard and mouse bytes from stdin into low-level `Key` values. The terminal backend converts mouse coordinates into canvas coordinates and emits `InputEvent`. `event.rs` maps those events plus configured keybindings into `Command` values.
+
+Supported interactions include:
+
+- view picker (`o`, arrows, Enter, Esc);
+- pan/zoom (`+`, `-`, arrows, drag, wheel);
+- reset/fit (`0`, `f`);
+- click-to-drill and Backspace navigation;
+- reload (`r`), help (`?`), quit (`q`).
 
 ## 3. Data flow
 
-```
-workspace.dsl
-     │
-     ▼
-[ structurizr-cli export -format <svg> ]   (subprocess: at load and on reload)
-     │
-     ▼
-*.svg per view  +  workspace.json
-     │
-     ▼
-[ SVG processor ]
-     │
-     ▼
-View store (raster + bbox map per view)
-     │
-     ▼
-[ Terminal renderer ] ◀──── [ Navigation state ] ◀──── [ Input handler ]
-     │
-     ▼
-Kitty graphics escape sequences → terminal
+```text
+workspace.dsl / workspace.json
+        │
+        ▼
+structurizr-cli export -format svg       (load and reload effect)
+        │
+        ▼
+exported SVGs + workspace.json
+        │
+        ├──► workspace metadata parser ──► ViewStore metadata
+        │
+        └──► usvg/resvg renderer ────────► RenderedView cache + hit boxes
+                                                ▲
+                                                │
+raw input ─► InputEvent ─► Command ─► AppState ─┴─► RenderFrame ─► TerminalBackend ─► terminal
 ```
 
 ## 4. Technology choices
 
 | Layer | Choice | Why |
 |---|---|---|
-| Language | Rust | Single static binary, easy distribution, mature TUI/graphics ecosystem |
-| TUI framework | ratatui | Widely used, immediate-mode, plays well with Kitty image overlay |
-| SVG parse + rasterize | `usvg` + `resvg` + `tiny-skia` | Pure Rust, no system deps, print-quality output |
-| Kitty protocol | direct encoder OR `ratatui-image` | Choice deferred to Phase 1 spike — see implementation plan |
-| Async runtime | `tokio` | Subprocess and stdin-parsing both benefit |
-| Workspace JSON model | `serde` + a hand-modeled subset of Structurizr's schema | Avoid generated full-schema bloat; model what we use |
-| CLI parsing | `clap` | Standard |
+| Language | Rust | Single static binary, strong CLI/tooling ecosystem |
+| CLI parsing | `clap` | Standard typed argument parser |
+| Workspace JSON | `serde` + hand-modeled Structurizr subset | Model only the schema needed for navigation |
+| SVG geometry | `usvg` | Resolves SVG transforms and element bounds robustly |
+| SVG rasterization | `resvg` + `tiny-skia` | Pure Rust, no system graphics dependencies |
+| Terminal graphics | Direct Kitty protocol encoder | Precise image caching/source-rect control |
+| Terminal capability/input | Direct terminal escape handling | Small surface area; no async runtime required today |
+| Tests | Unit tests + fake terminal backend | Exercise state/backend behavior without a TTY |
 
-### 4.1 Why SVG (not PlantUML or Mermaid)
+### 4.1 Why SVG
 
-`structurizr-cli` can export to PlantUML, Mermaid, DOT, and SVG. We use SVG because:
+`structurizr-cli` can export PlantUML, Mermaid, DOT, and SVG. c4tui uses SVG because:
 
-- It carries Structurizr element IDs natively in `<g id="...">` groups, making hit-testing a parse step rather than a coordinate-reverse-engineering problem.
-- It is rasterizable at any DPI without re-exporting from the CLI.
-- `resvg` is mature, fast, and produces print-quality output.
-
-The cost is a transitive PlantUML/Graphviz dependency inside `structurizr-cli`'s export path, which we accept as out-of-process.
+- Structurizr element IDs are preserved as SVG group IDs, enabling hit testing.
+- SVG can be rasterized at any DPI without re-exporting.
+- `usvg`/`resvg` provide robust parsing, transform handling, and raster output in-process.
 
 ## 5. Key trade-offs
 
-### 5.1 Subprocess on every (re)load
+### 5.1 Subprocess on load/reload
 
-Cold start cost is dominated by `structurizr-cli` warmup (~2–5 s typical). We accept this for v1; the alternative is reimplementing Structurizr's DSL parser and layout pipeline in Rust, which is enormous scope creep with little user value.
+Cold start is dominated by `structurizr-cli`. Reimplementing Structurizr DSL parsing and layout in Rust would be large scope creep, so c4tui treats the CLI as the authoritative exporter.
 
-### 5.2 Rasters are immutable
+### 5.2 Kitty-only rendering
 
-We never partially update a raster. Pan/zoom is a re-place of the same image with a different source rectangle. This keeps the renderer simple and matches what the Kitty protocol is good at.
+Sixel and iTerm2 fallback support would add substantial complexity for a weaker experience. c4tui currently detects unsupported terminals and fails clearly rather than shipping degraded rendering.
 
-### 5.3 Trust the SVG element IDs
+### 5.3 Cached rasters, mutable source rectangles
 
-We assume Structurizr's SVG export emits stable, parseable element IDs. If upstream changes the format we adapt; we deliberately do not hedge by also computing positions ourselves.
+A rendered view's raster is immutable once cached. Pan/zoom is expressed by changing Kitty source-rectangle placement, avoiding retransmission and keeping interaction responsive.
 
-### 5.4 Kitty-only for v1
+### 5.4 Small explicit architecture over a UI framework
 
-Sixel and iTerm2 inline-image fallbacks are real engineering effort for a worse experience. We refuse to run on unsupported terminals rather than ship a degraded path.
+The app uses simple internal types (`InputEvent`, `Command`, `AppState`, `RenderFrame`, `TerminalBackend`) instead of a larger TUI framework. This keeps the core behavior easy to test and avoids pulling terminal protocol details into state updates.
 
 ## 6. Security considerations
 
-- c4tui invokes a subprocess with paths derived from CLI arguments. Argument-quoting must be airtight — never construct shell strings.
-- Workspace files may reference URLs (themes). Default behavior in v1: no network fetches. URL-referenced themes are reported as unavailable; the diagram renders un-themed.
-- No telemetry. No background update checks.
+- Subprocess execution uses argument vectors, not shell strings.
+- Workspace paths come from CLI arguments and should be treated as untrusted file inputs.
+- Workspace themes or remote references are not fetched by c4tui itself.
+- No telemetry and no background update checks.
 
 ## 7. Distribution
 
-- `cargo install c4tui` (publish to crates.io once stable).
-- Pre-built binaries via GitHub Releases for macOS (arm64 + amd64) and Linux (amd64 + arm64).
-- Homebrew tap.
+- `cargo install c4tui`
+- Homebrew tap: `brew install scshafe/tap/c4tui`
+- GitHub Releases with macOS arm64/amd64 and Linux arm64/amd64 archives
 
-Distribution is Phase 6 in the implementation plan.
+Release automation is documented in [docs/releasing.md](./docs/releasing.md).
