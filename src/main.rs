@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fmt;
 use std::fs;
-use std::io::{self, IsTerminal, Read, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -402,6 +402,7 @@ fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>> {
 struct ViewStore {
     views: Vec<ViewInfo>,
     rendered: HashMap<usize, RenderedView>,
+    transforms: HashMap<usize, ViewTransform>,
 }
 
 impl ViewStore {
@@ -413,6 +414,7 @@ impl ViewStore {
         Ok(Self {
             views,
             rendered: HashMap::new(),
+            transforms: HashMap::new(),
         })
     }
 
@@ -432,17 +434,128 @@ impl ViewStore {
 
         Ok(self.rendered.get(&index).expect("rendered view inserted"))
     }
+
+    fn transform(&self, index: usize) -> ViewTransform {
+        self.transforms.get(&index).copied().unwrap_or_default()
+    }
+
+    fn set_transform(&mut self, index: usize, transform: ViewTransform) {
+        self.transforms.insert(index, transform);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ViewTransform {
+    scale: f32,
+    offset_x: f32,
+    offset_y: f32,
+}
+
+impl Default for ViewTransform {
+    fn default() -> Self {
+        Self {
+            scale: 1.0,
+            offset_x: 0.0,
+            offset_y: 0.0,
+        }
+    }
+}
+
+impl ViewTransform {
+    fn zoomed(
+        self,
+        factor: f32,
+        center_x: f32,
+        center_y: f32,
+        image_width: u32,
+        image_height: u32,
+    ) -> Self {
+        let old_scale = self.scale;
+        let scale = (self.scale * factor).clamp(1.0, 4.0);
+        if (scale - old_scale).abs() < f32::EPSILON {
+            return self;
+        }
+
+        let image_width = image_width as f32;
+        let image_height = image_height as f32;
+        let old_width = image_width / old_scale;
+        let old_height = image_height / old_scale;
+        let new_width = image_width / scale;
+        let new_height = image_height / scale;
+        let center_image_x = self.offset_x + old_width * center_x.clamp(0.0, 1.0);
+        let center_image_y = self.offset_y + old_height * center_y.clamp(0.0, 1.0);
+
+        Self {
+            scale,
+            offset_x: center_image_x - new_width * center_x.clamp(0.0, 1.0),
+            offset_y: center_image_y - new_height * center_y.clamp(0.0, 1.0),
+        }
+        .clamped(image_width as u32, image_height as u32)
+    }
+
+    fn panned(self, dx: f32, dy: f32, image_width: u32, image_height: u32) -> Self {
+        Self {
+            offset_x: self.offset_x + dx,
+            offset_y: self.offset_y + dy,
+            ..self
+        }
+        .clamped(image_width, image_height)
+    }
+
+    fn reset() -> Self {
+        Self::default()
+    }
+
+    fn source_rect(self, image_width: u32, image_height: u32) -> SourceRect {
+        let clamped = self.clamped(image_width, image_height);
+        let width = ((image_width as f32 / clamped.scale).round() as u32).clamp(1, image_width);
+        let height = ((image_height as f32 / clamped.scale).round() as u32).clamp(1, image_height);
+        let max_x = image_width.saturating_sub(width);
+        let max_y = image_height.saturating_sub(height);
+        SourceRect {
+            x: (clamped.offset_x.round() as u32).min(max_x),
+            y: (clamped.offset_y.round() as u32).min(max_y),
+            width,
+            height,
+        }
+    }
+
+    fn clamped(self, image_width: u32, image_height: u32) -> Self {
+        let scale = self.scale.clamp(1.0, 4.0);
+        let source_width = image_width as f32 / scale;
+        let source_height = image_height as f32 / scale;
+        let max_x = (image_width as f32 - source_width).max(0.0);
+        let max_y = (image_height as f32 - source_height).max(0.0);
+        Self {
+            scale,
+            offset_x: self.offset_x.clamp(0.0, max_x),
+            offset_y: self.offset_y.clamp(0.0, max_y),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SourceRect {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
 }
 
 #[derive(Debug)]
 struct App {
     store: ViewStore,
     current: usize,
+    last_drag: Option<(u16, u16)>,
 }
 
 impl App {
     fn new(store: ViewStore) -> Self {
-        Self { store, current: 0 }
+        Self {
+            store,
+            current: 0,
+            last_drag: None,
+        }
     }
 
     fn run(&mut self, terminal: &mut TerminalSession) -> Result<()> {
@@ -457,87 +570,279 @@ impl App {
                     }
                     terminal.display_view(self.current, &mut self.store)?;
                 }
+                Key::Char('+') | Key::Char('=') => {
+                    self.zoom_current(1.25, (0.5, 0.5))?;
+                    terminal.display_view(self.current, &mut self.store)?;
+                }
+                Key::Char('-') | Key::Char('_') => {
+                    self.zoom_current(0.8, (0.5, 0.5))?;
+                    terminal.display_view(self.current, &mut self.store)?;
+                }
+                Key::MouseWheelUp { x, y } => {
+                    self.zoom_current(1.25, terminal.mouse_canvas_point(x, y))?;
+                    terminal.display_view(self.current, &mut self.store)?;
+                }
+                Key::MouseWheelDown { x, y } => {
+                    self.zoom_current(0.8, terminal.mouse_canvas_point(x, y))?;
+                    terminal.display_view(self.current, &mut self.store)?;
+                }
+                Key::Char('0') => {
+                    self.store
+                        .set_transform(self.current, ViewTransform::reset());
+                    terminal.display_view(self.current, &mut self.store)?;
+                }
+                Key::Char('f') | Key::Char('F') => {
+                    self.store
+                        .set_transform(self.current, ViewTransform::reset());
+                    terminal.display_view(self.current, &mut self.store)?;
+                }
+                Key::Left => {
+                    self.pan_current(-0.10, 0.0)?;
+                    terminal.display_view(self.current, &mut self.store)?;
+                }
+                Key::Right => {
+                    self.pan_current(0.10, 0.0)?;
+                    terminal.display_view(self.current, &mut self.store)?;
+                }
+                Key::Up => {
+                    self.pan_current(0.0, -0.10)?;
+                    terminal.display_view(self.current, &mut self.store)?;
+                }
+                Key::Down => {
+                    self.pan_current(0.0, 0.10)?;
+                    terminal.display_view(self.current, &mut self.store)?;
+                }
+                Key::MouseDrag { x, y } => {
+                    if let Some((last_x, last_y)) = self.last_drag {
+                        let dx = (last_x as f32 - x as f32) / terminal.canvas_cols() as f32;
+                        let dy = (last_y as f32 - y as f32) / terminal.canvas_rows() as f32;
+                        self.pan_current(dx, dy)?;
+                        terminal.display_view(self.current, &mut self.store)?;
+                    }
+                    self.last_drag = Some((x, y));
+                }
+                Key::MouseRelease => {
+                    self.last_drag = None;
+                }
                 _ => {}
             }
         }
 
         Ok(())
     }
+
+    fn zoom_current(&mut self, factor: f32, center: (f32, f32)) -> Result<()> {
+        let (width, height) = {
+            let rendered = self.store.rendered_view(self.current)?;
+            (rendered.width, rendered.height)
+        };
+        let transform = self
+            .store
+            .transform(self.current)
+            .zoomed(factor, center.0, center.1, width, height);
+        self.store.set_transform(self.current, transform);
+        Ok(())
+    }
+
+    fn pan_current(&mut self, dx_fraction: f32, dy_fraction: f32) -> Result<()> {
+        let (width, height) = {
+            let rendered = self.store.rendered_view(self.current)?;
+            (rendered.width, rendered.height)
+        };
+        let transform = self.store.transform(self.current);
+        let rect = transform.source_rect(width, height);
+        let dx = rect.width as f32 * dx_fraction;
+        let dy = rect.height as f32 * dy_fraction;
+        self.store
+            .set_transform(self.current, transform.panned(dx, dy, width, height));
+        Ok(())
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum Key {
     Char(char),
     Up,
     Down,
+    Left,
+    Right,
     Enter,
     Esc,
     CtrlC,
+    MouseWheelUp { x: u16, y: u16 },
+    MouseWheelDown { x: u16, y: u16 },
+    MouseDrag { x: u16, y: u16 },
+    MouseRelease,
     Unknown,
 }
 
 fn read_key() -> Result<Key> {
-    let mut stdin = io::stdin();
-    let mut byte = [0_u8; 1];
-    stdin.read_exact(&mut byte)?;
+    let byte = read_stdin_byte_blocking()?;
 
-    Ok(match byte[0] {
+    Ok(match byte {
         b'\r' | b'\n' => Key::Enter,
         0x03 => Key::CtrlC,
-        0x1b => {
-            let mut seq = [0_u8; 2];
-            match stdin.read(&mut seq) {
-                Ok(2) if seq == [b'[', b'A'] => Key::Up,
-                Ok(2) if seq == [b'[', b'B'] => Key::Down,
-                _ => Key::Esc,
-            }
-        }
+        0x1b => parse_escape_sequence()?,
         byte if byte.is_ascii() && !byte.is_ascii_control() => Key::Char(byte as char),
         _ => Key::Unknown,
     })
 }
 
+fn read_stdin_byte_blocking() -> io::Result<u8> {
+    loop {
+        let mut byte = [0_u8; 1];
+        match unsafe { libc::read(libc::STDIN_FILENO, byte.as_mut_ptr().cast(), 1) } {
+            1 => return Ok(byte[0]),
+            -1 => {
+                let err = io::Error::last_os_error();
+                if err.kind() != io::ErrorKind::WouldBlock {
+                    return Err(err);
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            _ => std::thread::sleep(Duration::from_millis(2)),
+        }
+    }
+}
+
+fn parse_escape_sequence() -> io::Result<Key> {
+    let mut bytes = Vec::new();
+    let deadline = Instant::now() + Duration::from_millis(25);
+    while Instant::now() < deadline {
+        let mut byte = [0_u8; 1];
+        match unsafe { libc::read(libc::STDIN_FILENO, byte.as_mut_ptr().cast(), 1) } {
+            1 => {
+                bytes.push(byte[0]);
+                if matches!(byte[0], b'A' | b'B' | b'C' | b'D' | b'M' | b'm') {
+                    break;
+                }
+            }
+            -1 => {
+                let err = io::Error::last_os_error();
+                if err.kind() != io::ErrorKind::WouldBlock {
+                    return Err(err);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            _ => std::thread::sleep(Duration::from_millis(1)),
+        }
+    }
+
+    Ok(parse_escape_bytes(&bytes))
+}
+
+fn parse_escape_bytes(bytes: &[u8]) -> Key {
+    match bytes {
+        [b'[', b'A'] => Key::Up,
+        [b'[', b'B'] => Key::Down,
+        [b'[', b'C'] => Key::Right,
+        [b'[', b'D'] => Key::Left,
+        _ => parse_sgr_mouse(bytes).unwrap_or(Key::Esc),
+    }
+}
+
+fn parse_sgr_mouse(bytes: &[u8]) -> Option<Key> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    if !text.starts_with("[<") || !(text.ends_with('M') || text.ends_with('m')) {
+        return None;
+    }
+    let released = text.ends_with('m');
+    let body = &text[2..text.len() - 1];
+    let mut parts = body.split(';');
+    let code = parts.next()?.parse::<u16>().ok()?;
+    let x = parts.next()?.parse::<u16>().ok()?;
+    let y = parts.next()?.parse::<u16>().ok()?;
+
+    if released {
+        return Some(Key::MouseRelease);
+    }
+
+    match code {
+        64 => Some(Key::MouseWheelUp { x, y }),
+        65 => Some(Key::MouseWheelDown { x, y }),
+        32..=63 => Some(Key::MouseDrag { x, y }),
+        _ => None,
+    }
+}
+
 struct TerminalSession {
     original_termios: libc::termios,
+    original_flags: libc::c_int,
     transmitted_images: HashSet<u32>,
+    cols: u16,
+    rows: u16,
 }
 
 impl TerminalSession {
     fn enter() -> Result<Self> {
         let original_termios = get_termios(libc::STDIN_FILENO)?;
+        let original_flags = get_fd_flags(libc::STDIN_FILENO)?;
         let mut raw = original_termios;
         make_raw(&mut raw);
-        raw.c_cc[libc::VMIN] = 1;
+        raw.c_cc[libc::VMIN] = 0;
         raw.c_cc[libc::VTIME] = 0;
         set_termios(libc::STDIN_FILENO, &raw)?;
+        set_fd_flags(libc::STDIN_FILENO, original_flags | libc::O_NONBLOCK)?;
 
-        write_stdout_all(b"\x1b[?1049h\x1b[?25l")?;
+        let (cols, rows) = terminal_size();
+        write_stdout_all(b"\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1016h")?;
         Ok(Self {
             original_termios,
+            original_flags,
             transmitted_images: HashSet::new(),
+            cols,
+            rows,
         })
     }
 
     fn display_view(&mut self, index: usize, store: &mut ViewStore) -> Result<()> {
         let image_id = image_id_for_view(index);
         let view = store.view(index).clone();
-        let rendered = store.rendered_view(index)?;
+        let (width, height) = {
+            let rendered = store.rendered_view(index)?;
+            if !self.transmitted_images.contains(&image_id) {
+                transmit_kitty_png(image_id, &rendered.png)?;
+                self.transmitted_images.insert(image_id);
+            }
+            (rendered.width, rendered.height)
+        };
 
-        if !self.transmitted_images.contains(&image_id) {
-            transmit_kitty_png(image_id, &rendered.png)?;
-            self.transmitted_images.insert(image_id);
-        }
-
+        let transform = store.transform(index);
+        let rect = transform.source_rect(width, height);
         let title = format!(
-            "c4tui | {} ({}) | {} | {}x{} | o: views | q: quit",
-            view.name, view.key, view.view_type, rendered.width, rendered.height
+            "c4tui | {} ({}) | {} | zoom {:.0}% | arrows pan | +/- zoom | 0/f fit | o views | q quit",
+            view.name, view.key, view.view_type, transform.scale * 100.0
         );
         write_stdout_all(b"\x1b[2J\x1b[H")?;
         write_stdout_all(title.as_bytes())?;
         write_stdout_all(b"\r\n")?;
-        write!(io::stdout().lock(), "\x1b_Ga=p,i={image_id},p=1,q=2;\x1b\\")?;
+        write!(
+            io::stdout().lock(),
+            "\x1b_Ga=p,i={image_id},p=1,q=2,X={},Y={},W={},H={},c={},r={};\x1b\\",
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            self.cols,
+            self.canvas_rows()
+        )?;
         io::stdout().flush()?;
         Ok(())
+    }
+
+    fn canvas_cols(&self) -> u16 {
+        self.cols.max(1)
+    }
+
+    fn canvas_rows(&self) -> u16 {
+        self.rows.saturating_sub(1).max(1)
+    }
+
+    fn mouse_canvas_point(&self, x: u16, y: u16) -> (f32, f32) {
+        (
+            (x.saturating_sub(1) as f32 / self.canvas_cols() as f32).clamp(0.0, 1.0),
+            (y.saturating_sub(2) as f32 / self.canvas_rows() as f32).clamp(0.0, 1.0),
+        )
     }
 
     fn open_view_picker(&mut self, store: &ViewStore, current: usize) -> Result<Option<usize>> {
@@ -584,9 +889,20 @@ impl Drop for TerminalSession {
             let _ = write!(io::stdout().lock(), "\x1b_Ga=d,i={image_id};\x1b\\");
         }
         let _ = io::stdout().flush();
-        let _ = write_stdout_all(b"\x1b[?25h\x1b[?1049l");
+        let _ =
+            write_stdout_all(b"\x1b[?1016l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?25h\x1b[?1049l");
+        let _ = set_fd_flags(libc::STDIN_FILENO, self.original_flags);
         let _ = set_termios(libc::STDIN_FILENO, &self.original_termios);
     }
+}
+
+fn terminal_size() -> (u16, u16) {
+    let mut size = std::mem::MaybeUninit::<libc::winsize>::zeroed();
+    if unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, size.as_mut_ptr()) } == -1 {
+        return (80, 24);
+    }
+    let size = unsafe { size.assume_init() };
+    (size.ws_col.max(1), size.ws_row.max(2))
 }
 
 fn image_id_for_view(index: usize) -> u32 {
@@ -601,7 +917,7 @@ fn transmit_kitty_png(image_id: u32, png: &[u8]) -> Result<()> {
         let more = if chunks.peek().is_some() { 1 } else { 0 };
         write!(
             io::stdout().lock(),
-            "\x1b_Ga=t,f=100,t=f,i={image_id},m={more};{}\x1b\\",
+            "\x1b_Ga=t,f=100,i={image_id},m={more};{}\x1b\\",
             std::str::from_utf8(chunk)?
         )?;
         io::stdout().flush()?;
@@ -897,6 +1213,54 @@ mod tests {
     #[test]
     fn rejects_empty_view_store() {
         assert!(ViewStore::new(Vec::new()).is_err());
+    }
+
+    #[test]
+    fn view_transform_zoom_pan_and_reset_source_rect() {
+        let transform = ViewTransform::default()
+            .zoomed(2.0, 0.5, 0.5, 1000, 800)
+            .panned(100.0, 50.0, 1000, 800);
+        let rect = transform.source_rect(1000, 800);
+
+        assert_eq!(rect.width, 500);
+        assert_eq!(rect.height, 400);
+        assert_eq!(rect.x, 350);
+        assert_eq!(rect.y, 250);
+        assert_eq!(ViewTransform::reset(), ViewTransform::default());
+    }
+
+    #[test]
+    fn view_transform_clamps_to_image_bounds() {
+        let transform = ViewTransform {
+            scale: 10.0,
+            offset_x: 10_000.0,
+            offset_y: 10_000.0,
+        }
+        .clamped(1000, 800);
+        let rect = transform.source_rect(1000, 800);
+
+        assert_eq!(transform.scale, 4.0);
+        assert_eq!(rect.width, 250);
+        assert_eq!(rect.height, 200);
+        assert_eq!(rect.x, 750);
+        assert_eq!(rect.y, 600);
+    }
+
+    #[test]
+    fn parses_sgr_mouse_wheel_and_drag() {
+        assert_eq!(
+            parse_sgr_mouse(b"[<64;10;20M"),
+            Some(Key::MouseWheelUp { x: 10, y: 20 })
+        );
+        assert_eq!(
+            parse_sgr_mouse(b"[<65;10;20M"),
+            Some(Key::MouseWheelDown { x: 10, y: 20 })
+        );
+        assert_eq!(
+            parse_sgr_mouse(b"[<32;12;24M"),
+            Some(Key::MouseDrag { x: 12, y: 24 })
+        );
+        assert_eq!(parse_sgr_mouse(b"[<0;12;24m"), Some(Key::MouseRelease));
     }
 
     #[test]
