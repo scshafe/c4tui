@@ -1,3 +1,4 @@
+use crate::config::KeyBindings;
 use crate::input::{read_key, Key};
 use crate::tty::{
     get_fd_flags, get_termios, make_raw, set_fd_flags, set_termios, terminal_size, write_stdout_all,
@@ -59,7 +60,7 @@ impl TerminalSession {
         let rect = transform.source_rect(width, height);
         let breadcrumb = format_breadcrumb(store, breadcrumbs, index);
         let title = format!(
-            "c4tui | {} | {} | zoom {:.0}% | click drill | Backspace back | o views | q quit",
+            "c4tui | {} | {} | zoom {:.0}% | click drill | Backspace back | ? help | q quit",
             breadcrumb,
             view.view_type,
             transform.scale * 100.0
@@ -112,6 +113,54 @@ impl TerminalSession {
                 _ => {}
             }
         }
+    }
+
+    pub fn clear_image_cache(&mut self) -> Result<()> {
+        for image_id in &self.transmitted_images {
+            write!(io::stdout().lock(), "\x1b_Ga=d,i={image_id};\x1b\\")?;
+        }
+        io::stdout().flush()?;
+        self.transmitted_images.clear();
+        Ok(())
+    }
+
+    pub fn show_error(&mut self, title: &str, message: &str) -> Result<()> {
+        self.show_dialog(title, message, "Press any key to continue")
+    }
+
+    pub fn show_message(&mut self, title: &str, message: &str) -> Result<()> {
+        self.show_dialog(title, message, "")
+    }
+
+    pub fn show_help(&mut self, keys: &KeyBindings) -> Result<()> {
+        let help = format!(
+            "Keys\n\n  {quit}  Quit\n  {open}  Open view picker\n  {reload}  Reload workspace/export\n  Backspace  Go back through breadcrumbs\n  {zoom_in}/=  Zoom in\n  {zoom_out}/_  Zoom out\n  {reset} or {fit}  Reset/fit view\n  Arrow keys  Pan\n  Mouse wheel  Zoom around cursor\n  Mouse drag  Pan\n  Click element  Drill into child view\n\nConfig: ~/.config/c4tui/config.toml\nLogging: --log-file <path>, level via RUST_LOG",
+            quit = keys.quit,
+            open = keys.open_picker,
+            reload = keys.reload,
+            zoom_in = keys.zoom_in,
+            zoom_out = keys.zoom_out,
+            reset = keys.reset,
+            fit = keys.fit,
+        );
+        self.show_dialog("c4tui help", &help, "Press any key to continue")
+    }
+
+    fn show_dialog(&mut self, title: &str, message: &str, footer: &str) -> Result<()> {
+        write_stdout_all(b"\x1b[2J\x1b[H")?;
+        writeln!(io::stdout().lock(), "{title}\r")?;
+        writeln!(io::stdout().lock(), "{}\r", "=".repeat(title.len().max(1)))?;
+        for line in message.lines() {
+            writeln!(io::stdout().lock(), "{line}\r")?;
+        }
+        if !footer.is_empty() {
+            writeln!(io::stdout().lock(), "\r\n{footer}\r")?;
+            io::stdout().flush()?;
+            let _ = read_key()?;
+        } else {
+            io::stdout().flush()?;
+        }
+        Ok(())
     }
 
     fn draw_view_picker(&mut self, store: &ViewStore, selected: usize) -> Result<()> {

@@ -16,6 +16,14 @@ pub struct Cli {
     #[arg(long, default_value = "svg")]
     pub svg_format: String,
 
+    /// Path to a c4tui config.toml file. Defaults to ~/.config/c4tui/config.toml when present.
+    #[arg(long)]
+    pub config: Option<PathBuf>,
+
+    /// Write logs to this file. Logging level is controlled by RUST_LOG.
+    #[arg(long)]
+    pub log_file: Option<PathBuf>,
+
     /// Timeout for terminal capability probes, in milliseconds.
     #[arg(long, default_value_t = 200)]
     pub capability_timeout_ms: u64,

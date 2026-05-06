@@ -1,0 +1,84 @@
+.TH C4TUI 1 "May 2026" "c4tui 0.1.0" "User Commands"
+.SH NAME
+c4tui \- interactive terminal viewer for Structurizr C4 diagrams
+.SH SYNOPSIS
+.B c4tui
+[\fB--workspace\fR \fIPATH\fR]
+[\fB--structurizr-cli\fR \fIPATH\fR]
+[\fB--config\fR \fIPATH\fR]
+[\fB--log-file\fR \fIPATH\fR]
+.SH DESCRIPTION
+.B c4tui
+exports a Structurizr workspace to SVG using structurizr-cli, rasterizes the exported views, and displays them inline in terminals that support the Kitty graphics protocol. It supports view picking, pan/zoom, click-to-drill navigation, breadcrumb backtracking, reload, and an in-terminal help overlay.
+.SH OPTIONS
+.TP
+.B --workspace PATH
+Path to workspace.dsl, workspace.json, or a directory containing one.
+.TP
+.B --structurizr-cli PATH
+Path to the structurizr-cli executable. Defaults to searching PATH.
+.TP
+.B --svg-format FORMAT
+Structurizr CLI export format. Defaults to svg.
+.TP
+.B --config PATH
+Read configuration from PATH instead of ~/.config/c4tui/config.toml.
+.TP
+.B --log-file PATH
+Write logs to PATH. Select verbosity with RUST_LOG.
+.TP
+.B --capability-timeout-ms MS
+Timeout for terminal capability probes. Defaults to 200.
+.TP
+.B --force-probe
+Print capability results even when stdout is not attached to a terminal.
+.SH KEYBINDINGS
+.TP
+.B q
+Quit.
+.TP
+.B ?
+Show help.
+.TP
+.B o
+Open the view picker. Use Up/Down and Enter; Esc cancels.
+.TP
+.B r
+Reload the workspace by re-running Structurizr export.
+.TP
+.B Backspace
+Navigate back through breadcrumbs.
+.TP
+.B +, -
+Zoom in and out.
+.TP
+.B 0, f
+Reset/fit the current view.
+.TP
+.B Arrow keys
+Pan the current view.
+.TP
+.B Mouse wheel / drag / click
+Zoom, pan, and drill into child views.
+.SH CONFIGURATION
+The default configuration path is ~/.config/c4tui/config.toml.
+.PP
+.nf
+dpi_scale = 4.0
+
+[keybindings]
+quit = "q"
+open_picker = "o"
+reload = "r"
+help = "?"
+zoom_in = "+"
+zoom_out = "-"
+reset = "0"
+fit = "f"
+.fi
+.SH ENVIRONMENT
+.TP
+.B RUST_LOG
+Controls logging verbosity, for example RUST_LOG=c4tui=debug.
+.SH REQUIREMENTS
+A terminal with Kitty graphics support and structurizr-cli available locally.

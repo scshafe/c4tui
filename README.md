@@ -4,7 +4,7 @@ Interactive terminal viewer for Structurizr C4 diagrams. Click-to-drill navigati
 
 ## Status
 
-Pre-alpha. Phases 0–4 are implemented: the binary detects terminal capabilities, exports/rasterizes Structurizr SVG views, displays them with Kitty graphics, provides a keyboard view picker with per-view image caching, supports pan/zoom via Kitty source rectangles, and can click-to-drill into child views when Structurizr metadata links an element to another view. See [implementation-plan.md](./implementation-plan.md) for the phased roadmap.
+Pre-alpha moving toward v1. Phases 0–5 are implemented: the binary detects terminal capabilities, exports/rasterizes Structurizr SVG views, displays them with Kitty graphics, provides a keyboard view picker with per-view image caching, supports pan/zoom via Kitty source rectangles, click-to-drill navigation, reload, help, config, and file logging. See [implementation-plan.md](./implementation-plan.md) for the phased roadmap.
 
 ## Usage
 
@@ -12,7 +12,43 @@ Pre-alpha. Phases 0–4 are implemented: the binary detects terminal capabilitie
 cargo run -- --workspace ./workspace.dsl
 ```
 
-With `--workspace`, c4tui exports the workspace to SVG with `structurizr-cli`, renders the first exported view inline, opens a view picker with `o`, switches views with Up/Down + Enter, pans with arrow keys or mouse drag, zooms with `+`/`-` or the mouse wheel, resets fit with `0`/`f`, drills into child views by clicking diagram elements, goes back with Backspace, and exits with `q`. Without `--workspace`, it only probes terminal capabilities and exits. It returns non-zero when Kitty graphics support is unavailable, because inline image rendering requires it.
+With `--workspace`, c4tui exports the workspace to SVG with `structurizr-cli`, renders the first exported view inline, opens a view picker with `o`, switches views with Up/Down + Enter, pans with arrow keys or mouse drag, zooms with `+`/`-` or the mouse wheel, resets fit with `0`/`f`, drills into child views by clicking diagram elements, goes back with Backspace, reloads the workspace with `r`, shows help with `?`, and exits with `q`. Without `--workspace`, it only probes terminal capabilities and exits. It returns non-zero when Kitty graphics support is unavailable, because inline image rendering requires it.
+
+Useful flags:
+
+```sh
+c4tui --workspace ./workspace.dsl \
+  --structurizr-cli /path/to/structurizr-cli \
+  --config ~/.config/c4tui/config.toml \
+  --log-file ./c4tui.log
+```
+
+Logging uses `RUST_LOG`, for example:
+
+```sh
+RUST_LOG=c4tui=debug c4tui --workspace ./workspace.dsl --log-file ./c4tui.log
+```
+
+## Configuration
+
+c4tui reads `~/.config/c4tui/config.toml` when present, or a path supplied with `--config`.
+
+```toml
+# Raster scale used before sending images to the terminal. Clamped to 1.0..8.0.
+dpi_scale = 4.0
+
+[keybindings]
+quit = "q"
+open_picker = "o"
+reload = "r"
+help = "?"
+zoom_in = "+"
+zoom_out = "-"
+reset = "0"
+fit = "f"
+```
+
+All runtime keybindings are discoverable from the `?` help overlay.
 
 ## What it does (intended)
 
@@ -37,6 +73,7 @@ Sixel and iTerm2 inline-image fallbacks are explicitly out of scope for v1.
 - [specification.md](./specification.md) — what c4tui does, contracts, failure modes
 - [architecture.md](./architecture.md) — components, data flow, technology choices
 - [implementation-plan.md](./implementation-plan.md) — phased delivery and acceptance criteria
+- [docs/c4tui.1](./docs/c4tui.1) — man page source
 
 ## License
 

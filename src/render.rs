@@ -30,20 +30,23 @@ impl ElementBBox {
     }
 }
 
-pub fn render_svg(svg_path: &Path) -> Result<RenderedView> {
+pub fn render_svg(svg_path: &Path, dpi_scale: f32) -> Result<RenderedView> {
     let svg =
         fs::read(svg_path).with_context(|| format!("failed to read {}", svg_path.display()))?;
-    let bboxes = extract_element_bboxes(&svg);
+    let dpi_scale = dpi_scale.clamp(1.0, 8.0);
+    let bboxes = extract_element_bboxes(&svg, dpi_scale);
     let options = usvg::Options::default();
     let tree = usvg::Tree::from_data(&svg, &options)
         .with_context(|| format!("failed to parse SVG {}", svg_path.display()))?;
     let size = tree.size().to_int_size();
-    let mut pixmap = tiny_skia::Pixmap::new(size.width(), size.height())
+    let width = ((size.width() as f32) * dpi_scale).round().max(1.0) as u32;
+    let height = ((size.height() as f32) * dpi_scale).round().max(1.0) as u32;
+    let mut pixmap = tiny_skia::Pixmap::new(width, height)
         .ok_or_else(|| anyhow!("SVG view has an invalid size"))?;
 
     resvg::render(
         &tree,
-        tiny_skia::Transform::identity(),
+        tiny_skia::Transform::from_scale(dpi_scale, dpi_scale),
         &mut pixmap.as_mut(),
     );
     let png = encode_png(pixmap.width(), pixmap.height(), pixmap.data())?;
@@ -68,7 +71,7 @@ fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>> {
     Ok(png)
 }
 
-fn extract_element_bboxes(svg: &[u8]) -> Vec<ElementBBox> {
+fn extract_element_bboxes(svg: &[u8], scale: f32) -> Vec<ElementBBox> {
     let Ok(text) = std::str::from_utf8(svg) else {
         return Vec::new();
     };
@@ -84,10 +87,10 @@ fn extract_element_bboxes(svg: &[u8]) -> Vec<ElementBBox> {
         if let Some((x1, y1, x2, y2)) = descendant_bbox(node) {
             bboxes.push(ElementBBox {
                 element_id: element_id.to_owned(),
-                x: x1,
-                y: y1,
-                width: (x2 - x1).max(0.0),
-                height: (y2 - y1).max(0.0),
+                x: x1 * scale,
+                y: y1 * scale,
+                width: (x2 - x1).max(0.0) * scale,
+                height: (y2 - y1).max(0.0) * scale,
             });
         }
     }
@@ -181,12 +184,21 @@ mod tests {
     #[test]
     fn extracts_group_bboxes_with_translation() {
         let svg = br#"<svg><g id="1" transform="translate(10, 20)"><rect x="5" y="6" width="100" height="50"/></g></svg>"#;
-        let bboxes = extract_element_bboxes(svg);
+        let bboxes = extract_element_bboxes(svg, 1.0);
         assert_eq!(bboxes.len(), 1);
         assert_eq!(bboxes[0].element_id, "1");
         assert_eq!(bboxes[0].x, 15.0);
         assert_eq!(bboxes[0].y, 26.0);
         assert_eq!(bboxes[0].width, 100.0);
         assert_eq!(bboxes[0].height, 50.0);
+    }
+
+    #[test]
+    fn malformed_svg_returns_error_not_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("broken.svg");
+        fs::write(&path, "<svg><g>").unwrap();
+
+        assert!(render_svg(&path, 4.0).is_err());
     }
 }

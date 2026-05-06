@@ -1,5 +1,5 @@
 use crate::render::{render_svg, RenderedView};
-use crate::workspace::ViewInfo;
+use crate::workspace::{ExportedWorkspace, ViewInfo};
 use anyhow::{bail, Result};
 use std::collections::HashMap;
 
@@ -8,10 +8,12 @@ pub struct ViewStore {
     pub views: Vec<ViewInfo>,
     rendered: HashMap<usize, RenderedView>,
     transforms: HashMap<usize, ViewTransform>,
+    dpi_scale: f32,
+    _export: Option<ExportedWorkspace>,
 }
 
 impl ViewStore {
-    pub fn new(views: Vec<ViewInfo>) -> Result<Self> {
+    pub fn new(views: Vec<ViewInfo>, dpi_scale: f32) -> Result<Self> {
         if views.is_empty() {
             bail!("no exported SVG views were found");
         }
@@ -20,7 +22,14 @@ impl ViewStore {
             views,
             rendered: HashMap::new(),
             transforms: HashMap::new(),
+            dpi_scale: dpi_scale.clamp(1.0, 8.0),
+            _export: None,
         })
+    }
+
+    pub fn with_export(mut self, export: ExportedWorkspace) -> Self {
+        self._export = Some(export);
+        self
     }
 
     pub fn len(&self) -> usize {
@@ -33,7 +42,7 @@ impl ViewStore {
 
     pub fn rendered_view(&mut self, index: usize) -> Result<&RenderedView> {
         if !self.rendered.contains_key(&index) {
-            let rendered = render_svg(&self.views[index].svg_path)?;
+            let rendered = render_svg(&self.views[index].svg_path, self.dpi_scale)?;
             self.rendered.insert(index, rendered);
         }
 
@@ -195,14 +204,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let svg = dir.path().join("landscape.svg");
         fs::write(&svg, "<svg />").unwrap();
-        let store = ViewStore::new(vec![ViewInfo {
-            key: "landscape".to_owned(),
-            name: "Landscape".to_owned(),
-            view_type: "SystemLandscape".to_owned(),
-            svg_path: svg,
-            element_ids: std::collections::HashSet::new(),
-            child_view_by_element_id: std::collections::HashMap::new(),
-        }])
+        let store = ViewStore::new(
+            vec![ViewInfo {
+                key: "landscape".to_owned(),
+                name: "Landscape".to_owned(),
+                view_type: "SystemLandscape".to_owned(),
+                svg_path: svg,
+                element_ids: std::collections::HashSet::new(),
+                child_view_by_element_id: std::collections::HashMap::new(),
+            }],
+            1.0,
+        )
         .unwrap();
 
         assert_eq!(store.len(), 1);
@@ -211,7 +223,7 @@ mod tests {
 
     #[test]
     fn rejects_empty_view_store() {
-        assert!(ViewStore::new(Vec::new()).is_err());
+        assert!(ViewStore::new(Vec::new(), 1.0).is_err());
     }
 
     #[test]
@@ -227,24 +239,27 @@ mod tests {
         fs::write(&child_svg, r#"<svg width="100" height="100" />"#).unwrap();
         let mut child_view_by_element_id = std::collections::HashMap::new();
         child_view_by_element_id.insert("1".to_owned(), "child".to_owned());
-        let mut store = ViewStore::new(vec![
-            ViewInfo {
-                key: "parent".to_owned(),
-                name: "Parent".to_owned(),
-                view_type: "SystemContext".to_owned(),
-                svg_path: parent_svg,
-                element_ids: std::collections::HashSet::from(["1".to_owned()]),
-                child_view_by_element_id,
-            },
-            ViewInfo {
-                key: "child".to_owned(),
-                name: "Child".to_owned(),
-                view_type: "Container".to_owned(),
-                svg_path: child_svg,
-                element_ids: std::collections::HashSet::new(),
-                child_view_by_element_id: std::collections::HashMap::new(),
-            },
-        ])
+        let mut store = ViewStore::new(
+            vec![
+                ViewInfo {
+                    key: "parent".to_owned(),
+                    name: "Parent".to_owned(),
+                    view_type: "SystemContext".to_owned(),
+                    svg_path: parent_svg,
+                    element_ids: std::collections::HashSet::from(["1".to_owned()]),
+                    child_view_by_element_id,
+                },
+                ViewInfo {
+                    key: "child".to_owned(),
+                    name: "Child".to_owned(),
+                    view_type: "Container".to_owned(),
+                    svg_path: child_svg,
+                    element_ids: std::collections::HashSet::new(),
+                    child_view_by_element_id: std::collections::HashMap::new(),
+                },
+            ],
+            1.0,
+        )
         .unwrap();
 
         assert_eq!(

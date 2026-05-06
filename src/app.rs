@@ -1,7 +1,13 @@
 use crate::input::{read_key, Key};
 use crate::terminal::TerminalSession;
 use crate::view::{ViewStore, ViewTransform};
+use crate::{
+    config::AppConfig,
+    workspace::{discover_views, export_workspace, WorkspaceSource},
+};
 use anyhow::Result;
+use log::{error, info};
+use std::path::PathBuf;
 
 #[derive(Debug)]
 pub struct App {
@@ -9,15 +15,29 @@ pub struct App {
     current: usize,
     breadcrumbs: Vec<usize>,
     last_drag: Option<(u16, u16)>,
+    workspace: WorkspaceSource,
+    structurizr_cli: PathBuf,
+    svg_format: String,
+    config: AppConfig,
 }
 
 impl App {
-    pub fn new(store: ViewStore) -> Self {
+    pub fn new(
+        store: ViewStore,
+        workspace: WorkspaceSource,
+        structurizr_cli: PathBuf,
+        svg_format: String,
+        config: AppConfig,
+    ) -> Self {
         Self {
             store,
             current: 0,
             breadcrumbs: Vec::new(),
             last_drag: None,
+            workspace,
+            structurizr_cli,
+            svg_format,
+            config,
         }
     }
 
@@ -26,12 +46,40 @@ impl App {
 
         loop {
             match read_key()? {
-                Key::Char('q') | Key::Char('Q') | Key::CtrlC | Key::Esc => break,
-                Key::Char('o') | Key::Char('O') => {
+                Key::Char(ch) if self.is_key(ch, self.config.keys.quit) => break,
+                Key::CtrlC | Key::Esc => break,
+                Key::Char(ch) if self.is_key(ch, self.config.keys.open_picker) => {
                     if let Some(next) = terminal.open_view_picker(&self.store, self.current)? {
                         self.current = next;
                         self.breadcrumbs.clear();
                     }
+                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
+                }
+                Key::Char(ch) if self.is_key(ch, self.config.keys.reload) => {
+                    terminal
+                        .show_message("Reloading workspace...", "Re-running Structurizr export.")?;
+                    match self.reload() {
+                        Ok(()) => {
+                            terminal.clear_image_cache()?;
+                            terminal.display_view(
+                                self.current,
+                                &self.breadcrumbs,
+                                &mut self.store,
+                            )?;
+                        }
+                        Err(error) => {
+                            error!("reload failed: {error:#}");
+                            terminal.show_error("Reload failed", &format!("{error:#}"))?;
+                            terminal.display_view(
+                                self.current,
+                                &self.breadcrumbs,
+                                &mut self.store,
+                            )?;
+                        }
+                    }
+                }
+                Key::Char(ch) if self.is_key(ch, self.config.keys.help) => {
+                    terminal.show_help(&self.config.keys)?;
                     terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
                 }
                 Key::Back => {
@@ -52,11 +100,11 @@ impl App {
                         terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
                     }
                 }
-                Key::Char('+') | Key::Char('=') => {
+                Key::Char(ch) if ch == self.config.keys.zoom_in || ch == '=' => {
                     self.zoom_current(1.25, (0.5, 0.5))?;
                     terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
                 }
-                Key::Char('-') | Key::Char('_') => {
+                Key::Char(ch) if ch == self.config.keys.zoom_out || ch == '_' => {
                     self.zoom_current(0.8, (0.5, 0.5))?;
                     terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
                 }
@@ -68,7 +116,10 @@ impl App {
                     self.zoom_current(0.8, terminal.mouse_canvas_point(x, y))?;
                     terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
                 }
-                Key::Char('0') | Key::Char('f') | Key::Char('F') => {
+                Key::Char(ch)
+                    if self.is_key(ch, self.config.keys.reset)
+                        || self.is_key(ch, self.config.keys.fit) =>
+                {
                     self.store
                         .set_transform(self.current, ViewTransform::reset());
                     terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
@@ -106,6 +157,21 @@ impl App {
         }
 
         Ok(())
+    }
+
+    fn reload(&mut self) -> Result<()> {
+        info!("reloading workspace {}", self.workspace.path.display());
+        let exported = export_workspace(&self.workspace, &self.structurizr_cli, &self.svg_format)?;
+        let views = discover_views(&exported)?;
+        self.store = ViewStore::new(views, self.config.dpi_scale)?.with_export(exported);
+        self.current = 0;
+        self.breadcrumbs.clear();
+        self.last_drag = None;
+        Ok(())
+    }
+
+    fn is_key(&self, actual: char, configured: char) -> bool {
+        actual == configured || actual.eq_ignore_ascii_case(&configured)
     }
 
     fn zoom_current(&mut self, factor: f32, center: (f32, f32)) -> Result<()> {
