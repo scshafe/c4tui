@@ -1,4 +1,6 @@
+use crate::backend::{TerminalBackend, TerminalSize};
 use crate::config::KeyBindings;
+use crate::event::InputEvent;
 use crate::ids::ViewId;
 use crate::input::{read_key, Key};
 use crate::state::RenderFrame;
@@ -96,11 +98,36 @@ impl TerminalSession {
         self.rows.saturating_sub(1).max(1)
     }
 
+    pub fn size(&self) -> TerminalSize {
+        TerminalSize {
+            cols: self.cols,
+            rows: self.rows,
+        }
+    }
+
     pub fn mouse_canvas_point(&self, x: u16, y: u16) -> (f32, f32) {
         (
             (x.saturating_sub(1) as f32 / self.canvas_cols() as f32).clamp(0.0, 1.0),
             (y.saturating_sub(2) as f32 / self.canvas_rows() as f32).clamp(0.0, 1.0),
         )
+    }
+
+    pub fn read_input_event(&self) -> Result<InputEvent> {
+        Ok(match read_key()? {
+            Key::MouseClick { x, y } => {
+                let (canvas_x, canvas_y) = self.mouse_canvas_point(x, y);
+                InputEvent::MouseClick { canvas_x, canvas_y }
+            }
+            Key::MouseWheelUp { x, y } => {
+                let (canvas_x, canvas_y) = self.mouse_canvas_point(x, y);
+                InputEvent::MouseWheelUp { canvas_x, canvas_y }
+            }
+            Key::MouseWheelDown { x, y } => {
+                let (canvas_x, canvas_y) = self.mouse_canvas_point(x, y);
+                InputEvent::MouseWheelDown { canvas_x, canvas_y }
+            }
+            key => InputEvent::from(key),
+        })
     }
 
     pub fn open_view_picker(
@@ -194,6 +221,40 @@ impl TerminalSession {
 
         io::stdout().flush()?;
         Ok(())
+    }
+}
+
+impl TerminalBackend for TerminalSession {
+    fn size(&self) -> TerminalSize {
+        TerminalSession::size(self)
+    }
+
+    fn read_input(&mut self) -> Result<InputEvent> {
+        TerminalSession::read_input_event(self)
+    }
+
+    fn render(&mut self, frame: &RenderFrame, store: &mut ViewStore) -> Result<()> {
+        TerminalSession::display_frame(self, frame, store)
+    }
+
+    fn choose_view(&mut self, store: &ViewStore, current: ViewId) -> Result<Option<ViewId>> {
+        TerminalSession::open_view_picker(self, store, current)
+    }
+
+    fn clear_image_cache(&mut self) -> Result<()> {
+        TerminalSession::clear_image_cache(self)
+    }
+
+    fn show_message(&mut self, title: &str, message: &str) -> Result<()> {
+        TerminalSession::show_message(self, title, message)
+    }
+
+    fn show_error(&mut self, title: &str, message: &str) -> Result<()> {
+        TerminalSession::show_error(self, title, message)
+    }
+
+    fn show_help(&mut self, keys: &KeyBindings) -> Result<()> {
+        TerminalSession::show_help(self, keys)
     }
 }
 

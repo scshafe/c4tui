@@ -1,4 +1,5 @@
 mod app;
+mod backend;
 mod capabilities;
 mod cli;
 mod config;
