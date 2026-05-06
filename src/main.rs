@@ -3,6 +3,7 @@ use base64::Engine;
 use clap::Parser;
 use resvg::{tiny_skia, usvg};
 use serde::Deserialize;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fmt;
 use std::fs;
@@ -122,12 +123,11 @@ fn run() -> Result<()> {
         .unwrap_or_else(|| PathBuf::from("structurizr-cli"));
     let exported = export_workspace(&workspace, &structurizr_cli, &cli.svg_format)?;
     let views = discover_views(&exported)?;
-    let first_view = views.first().context("no exported SVG views were found")?;
-    let rendered = render_svg(&first_view.svg_path)?;
+    let view_store = ViewStore::new(views)?;
 
     let mut terminal = TerminalSession::enter()?;
-    terminal.display_view(first_view, &rendered)?;
-    terminal.wait_for_quit()?;
+    let mut app = App::new(view_store);
+    app.run(&mut terminal)?;
 
     Ok(())
 }
@@ -398,45 +398,199 @@ fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>> {
     Ok(png)
 }
 
-struct TerminalSession;
+#[derive(Debug)]
+struct ViewStore {
+    views: Vec<ViewInfo>,
+    rendered: HashMap<usize, RenderedView>,
+}
+
+impl ViewStore {
+    fn new(views: Vec<ViewInfo>) -> Result<Self> {
+        if views.is_empty() {
+            bail!("no exported SVG views were found");
+        }
+
+        Ok(Self {
+            views,
+            rendered: HashMap::new(),
+        })
+    }
+
+    fn len(&self) -> usize {
+        self.views.len()
+    }
+
+    fn view(&self, index: usize) -> &ViewInfo {
+        &self.views[index]
+    }
+
+    fn rendered_view(&mut self, index: usize) -> Result<&RenderedView> {
+        if !self.rendered.contains_key(&index) {
+            let rendered = render_svg(&self.views[index].svg_path)?;
+            self.rendered.insert(index, rendered);
+        }
+
+        Ok(self.rendered.get(&index).expect("rendered view inserted"))
+    }
+}
+
+#[derive(Debug)]
+struct App {
+    store: ViewStore,
+    current: usize,
+}
+
+impl App {
+    fn new(store: ViewStore) -> Self {
+        Self { store, current: 0 }
+    }
+
+    fn run(&mut self, terminal: &mut TerminalSession) -> Result<()> {
+        terminal.display_view(self.current, &mut self.store)?;
+
+        loop {
+            match read_key()? {
+                Key::Char('q') | Key::Char('Q') | Key::CtrlC | Key::Esc => break,
+                Key::Char('o') | Key::Char('O') => {
+                    if let Some(next) = terminal.open_view_picker(&self.store, self.current)? {
+                        self.current = next;
+                    }
+                    terminal.display_view(self.current, &mut self.store)?;
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Key {
+    Char(char),
+    Up,
+    Down,
+    Enter,
+    Esc,
+    CtrlC,
+    Unknown,
+}
+
+fn read_key() -> Result<Key> {
+    let mut stdin = io::stdin();
+    let mut byte = [0_u8; 1];
+    stdin.read_exact(&mut byte)?;
+
+    Ok(match byte[0] {
+        b'\r' | b'\n' => Key::Enter,
+        0x03 => Key::CtrlC,
+        0x1b => {
+            let mut seq = [0_u8; 2];
+            match stdin.read(&mut seq) {
+                Ok(2) if seq == [b'[', b'A'] => Key::Up,
+                Ok(2) if seq == [b'[', b'B'] => Key::Down,
+                _ => Key::Esc,
+            }
+        }
+        byte if byte.is_ascii() && !byte.is_ascii_control() => Key::Char(byte as char),
+        _ => Key::Unknown,
+    })
+}
+
+struct TerminalSession {
+    original_termios: libc::termios,
+    transmitted_images: HashSet<u32>,
+}
 
 impl TerminalSession {
     fn enter() -> Result<Self> {
+        let original_termios = get_termios(libc::STDIN_FILENO)?;
+        let mut raw = original_termios;
+        make_raw(&mut raw);
+        raw.c_cc[libc::VMIN] = 1;
+        raw.c_cc[libc::VTIME] = 0;
+        set_termios(libc::STDIN_FILENO, &raw)?;
+
         write_stdout_all(b"\x1b[?1049h\x1b[?25l")?;
-        Ok(Self)
+        Ok(Self {
+            original_termios,
+            transmitted_images: HashSet::new(),
+        })
     }
 
-    fn display_view(&mut self, view: &ViewInfo, rendered: &RenderedView) -> Result<()> {
+    fn display_view(&mut self, index: usize, store: &mut ViewStore) -> Result<()> {
+        let image_id = image_id_for_view(index);
+        let view = store.view(index).clone();
+        let rendered = store.rendered_view(index)?;
+
+        if !self.transmitted_images.contains(&image_id) {
+            transmit_kitty_png(image_id, &rendered.png)?;
+            self.transmitted_images.insert(image_id);
+        }
+
         let title = format!(
-            "c4tui | {} ({}) | {} | {}x{} | press q to quit",
+            "c4tui | {} ({}) | {} | {}x{} | o: views | q: quit",
             view.name, view.key, view.view_type, rendered.width, rendered.height
         );
         write_stdout_all(b"\x1b[2J\x1b[H")?;
         write_stdout_all(title.as_bytes())?;
         write_stdout_all(b"\r\n")?;
-        transmit_kitty_png(1, &rendered.png)?;
-        write_stdout_all(b"\x1b_Ga=p,i=1,p=1,q=2;\x1b\\")?;
+        write!(io::stdout().lock(), "\x1b_Ga=p,i={image_id},p=1,q=2;\x1b\\")?;
+        io::stdout().flush()?;
         Ok(())
     }
 
-    fn wait_for_quit(&mut self) -> Result<()> {
-        let mut stdin = io::stdin();
-        let mut byte = [0_u8; 1];
+    fn open_view_picker(&mut self, store: &ViewStore, current: usize) -> Result<Option<usize>> {
+        let mut selected = current;
         loop {
-            stdin.read_exact(&mut byte)?;
-            if matches!(byte[0], b'q' | b'Q' | 0x03 | 0x04 | 0x1b) {
-                break;
+            self.draw_view_picker(store, selected)?;
+            match read_key()? {
+                Key::Up => {
+                    selected = selected.saturating_sub(1);
+                }
+                Key::Down => {
+                    selected = (selected + 1).min(store.len() - 1);
+                }
+                Key::Enter => return Ok(Some(selected)),
+                Key::Esc | Key::Char('q') | Key::Char('Q') => return Ok(None),
+                _ => {}
             }
         }
+    }
+
+    fn draw_view_picker(&mut self, store: &ViewStore, selected: usize) -> Result<()> {
+        write_stdout_all(b"\x1b[2J\x1b[H")?;
+        write_stdout_all(b"Select a view (Up/Down, Enter, Esc)\r\n\r\n")?;
+
+        for (index, view) in store.views.iter().enumerate() {
+            let marker = if index == selected { ">" } else { " " };
+            writeln!(
+                io::stdout().lock(),
+                "{marker} {} ({}) [{}]\r",
+                view.name,
+                view.key,
+                view.view_type
+            )?;
+        }
+
+        io::stdout().flush()?;
         Ok(())
     }
 }
 
 impl Drop for TerminalSession {
     fn drop(&mut self) {
-        let _ = write_stdout_all(b"\x1b_Ga=d,i=1;\x1b\\");
+        for image_id in &self.transmitted_images {
+            let _ = write!(io::stdout().lock(), "\x1b_Ga=d,i={image_id};\x1b\\");
+        }
+        let _ = io::stdout().flush();
         let _ = write_stdout_all(b"\x1b[?25h\x1b[?1049l");
+        let _ = set_termios(libc::STDIN_FILENO, &self.original_termios);
     }
+}
+
+fn image_id_for_view(index: usize) -> u32 {
+    (index as u32) + 1
 }
 
 fn transmit_kitty_png(image_id: u32, png: &[u8]) -> Result<()> {
@@ -721,6 +875,28 @@ mod tests {
             metadata.find_for_svg_stem("containers").unwrap().view_type,
             "Container"
         );
+    }
+
+    #[test]
+    fn creates_view_store_for_non_empty_views() {
+        let dir = tempfile::tempdir().unwrap();
+        let svg = dir.path().join("landscape.svg");
+        fs::write(&svg, "<svg />").unwrap();
+        let store = ViewStore::new(vec![ViewInfo {
+            key: "landscape".to_owned(),
+            name: "Landscape".to_owned(),
+            view_type: "SystemLandscape".to_owned(),
+            svg_path: svg,
+        }])
+        .unwrap();
+
+        assert_eq!(store.len(), 1);
+        assert_eq!(image_id_for_view(0), 1);
+    }
+
+    #[test]
+    fn rejects_empty_view_store() {
+        assert!(ViewStore::new(Vec::new()).is_err());
     }
 
     #[test]

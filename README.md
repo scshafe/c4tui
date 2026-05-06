@@ -4,7 +4,7 @@ Interactive terminal viewer for Structurizr C4 diagrams. Click-to-drill navigati
 
 ## Status
 
-Pre-alpha. Phase 0 is complete. Phase 1 is underway: the binary can invoke `structurizr-cli`, discover exported SVG views, rasterize the first view, and transmit it via the Kitty graphics protocol. See [implementation-plan.md](./implementation-plan.md) for the phased roadmap.
+Pre-alpha. Phases 0–2 are implemented: the binary detects terminal capabilities, exports/rasterizes Structurizr SVG views, displays them with Kitty graphics, and provides a keyboard view picker with per-view image caching. See [implementation-plan.md](./implementation-plan.md) for the phased roadmap.
 
 ## Usage
 
@@ -12,7 +12,7 @@ Pre-alpha. Phase 0 is complete. Phase 1 is underway: the binary can invoke `stru
 cargo run -- --workspace ./workspace.dsl
 ```
 
-With `--workspace`, c4tui exports the workspace to SVG with `structurizr-cli`, renders the first exported view inline, and exits when you press `q`. Without `--workspace`, it only probes terminal capabilities and exits. It returns non-zero when Kitty graphics support is unavailable, because inline image rendering requires it.
+With `--workspace`, c4tui exports the workspace to SVG with `structurizr-cli`, renders the first exported view inline, opens a view picker with `o`, switches views with Up/Down + Enter, and exits with `q`. Without `--workspace`, it only probes terminal capabilities and exits. It returns non-zero when Kitty graphics support is unavailable, because inline image rendering requires it.
 
 ## What it does (intended)
 
