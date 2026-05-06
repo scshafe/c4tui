@@ -1,6 +1,7 @@
 use crate::config::KeyBindings;
 use crate::ids::ViewId;
 use crate::input::{read_key, Key};
+use crate::state::RenderFrame;
 use crate::tty::{
     get_fd_flags, get_termios, make_raw, set_fd_flags, set_termios, terminal_size, write_stdout_all,
 };
@@ -81,6 +82,10 @@ impl TerminalSession {
         )?;
         io::stdout().flush()?;
         Ok(())
+    }
+
+    pub fn display_frame(&mut self, frame: &RenderFrame, store: &mut ViewStore) -> Result<()> {
+        self.display_view(frame.current, &frame.breadcrumbs, store)
     }
 
     pub fn canvas_cols(&self) -> u16 {

@@ -1,7 +1,8 @@
-use crate::ids::ViewId;
+use crate::event::{Command, InputEvent};
 use crate::input::{read_key, Key};
+use crate::state::{AppState, Effect};
 use crate::terminal::TerminalSession;
-use crate::view::{ViewStore, ViewTransform};
+use crate::view::ViewStore;
 use crate::{
     config::AppConfig,
     workspace::{discover_views, export_workspace, WorkspaceSource},
@@ -13,9 +14,7 @@ use std::path::PathBuf;
 #[derive(Debug)]
 pub struct App {
     store: ViewStore,
-    current: ViewId,
-    breadcrumbs: Vec<ViewId>,
-    last_drag: Option<(u16, u16)>,
+    state: AppState,
     workspace: WorkspaceSource,
     structurizr_cli: PathBuf,
     svg_format: String,
@@ -32,9 +31,7 @@ impl App {
     ) -> Self {
         Self {
             store,
-            current: ViewId::first(),
-            breadcrumbs: Vec::new(),
-            last_drag: None,
+            state: AppState::default(),
             workspace,
             structurizr_cli,
             svg_format,
@@ -43,162 +40,86 @@ impl App {
     }
 
     pub fn run(&mut self, terminal: &mut TerminalSession) -> Result<()> {
-        terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
+        terminal.display_frame(&self.state.render_frame(), &mut self.store)?;
 
         loop {
-            match read_key()? {
-                Key::Char(ch) if self.is_key(ch, self.config.keys.quit) => break,
-                Key::CtrlC | Key::Esc => break,
-                Key::Char(ch) if self.is_key(ch, self.config.keys.open_picker) => {
-                    if let Some(next) = terminal.open_view_picker(&self.store, self.current)? {
-                        self.current = next;
-                        self.breadcrumbs.clear();
+            let input = self.read_input_event(terminal)?;
+            let command = Command::from_input(input, &self.config)
+                .with_canvas_size(terminal.canvas_cols(), terminal.canvas_rows());
+            let update = self.state.apply(command, &mut self.store)?;
+
+            match update.effect {
+                Some(Effect::Quit) => break,
+                Some(Effect::OpenPicker) => {
+                    if let Some(next) =
+                        terminal.open_view_picker(&self.store, self.state.current())?
+                    {
+                        self.state
+                            .apply(Command::SelectView(next), &mut self.store)?;
                     }
-                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
+                    terminal.display_frame(&self.state.render_frame(), &mut self.store)?;
                 }
-                Key::Char(ch) if self.is_key(ch, self.config.keys.reload) => {
+                Some(Effect::ReloadWorkspace) => {
                     terminal
                         .show_message("Reloading workspace...", "Re-running Structurizr export.")?;
-                    match self.reload() {
+                    match self.reload_store() {
                         Ok(()) => {
-                            terminal.clear_image_cache()?;
-                            terminal.display_view(
-                                self.current,
-                                &self.breadcrumbs,
-                                &mut self.store,
-                            )?;
+                            let update = self
+                                .state
+                                .apply(Command::ReloadSucceeded, &mut self.store)?;
+                            if update.effect == Some(Effect::ClearImageCache) {
+                                terminal.clear_image_cache()?;
+                            }
                         }
                         Err(error) => {
                             error!("reload failed: {error:#}");
+                            self.state.apply(Command::ReloadFailed, &mut self.store)?;
                             terminal.show_error("Reload failed", &format!("{error:#}"))?;
-                            terminal.display_view(
-                                self.current,
-                                &self.breadcrumbs,
-                                &mut self.store,
-                            )?;
                         }
                     }
+                    terminal.display_frame(&self.state.render_frame(), &mut self.store)?;
                 }
-                Key::Char(ch) if self.is_key(ch, self.config.keys.help) => {
+                Some(Effect::ClearImageCache) => {
+                    terminal.clear_image_cache()?;
+                    terminal.display_frame(&self.state.render_frame(), &mut self.store)?;
+                }
+                Some(Effect::ShowHelp) => {
                     terminal.show_help(&self.config.keys)?;
-                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
+                    terminal.display_frame(&self.state.render_frame(), &mut self.store)?;
                 }
-                Key::Back => {
-                    if let Some(previous) = self.breadcrumbs.pop() {
-                        self.current = previous;
-                    }
-                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
+                None if update.render => {
+                    terminal.display_frame(&self.state.render_frame(), &mut self.store)?;
                 }
-                Key::MouseClick { x, y } => {
-                    let point = terminal.mouse_canvas_point(x, y);
-                    if let Some(child) =
-                        self.store
-                            .child_view_at_canvas_point(self.current, point.0, point.1)?
-                    {
-                        self.breadcrumbs.push(self.current);
-                        self.current = child;
-                        self.last_drag = None;
-                        terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
-                    }
-                }
-                Key::Char(ch) if ch == self.config.keys.zoom_in || ch == '=' => {
-                    self.zoom_current(1.25, (0.5, 0.5))?;
-                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
-                }
-                Key::Char(ch) if ch == self.config.keys.zoom_out || ch == '_' => {
-                    self.zoom_current(0.8, (0.5, 0.5))?;
-                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
-                }
-                Key::MouseWheelUp { x, y } => {
-                    self.zoom_current(1.25, terminal.mouse_canvas_point(x, y))?;
-                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
-                }
-                Key::MouseWheelDown { x, y } => {
-                    self.zoom_current(0.8, terminal.mouse_canvas_point(x, y))?;
-                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
-                }
-                Key::Char(ch)
-                    if self.is_key(ch, self.config.keys.reset)
-                        || self.is_key(ch, self.config.keys.fit) =>
-                {
-                    self.store
-                        .set_transform(self.current, ViewTransform::reset());
-                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
-                }
-                Key::Left => {
-                    self.pan_current(-0.10, 0.0)?;
-                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
-                }
-                Key::Right => {
-                    self.pan_current(0.10, 0.0)?;
-                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
-                }
-                Key::Up => {
-                    self.pan_current(0.0, -0.10)?;
-                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
-                }
-                Key::Down => {
-                    self.pan_current(0.0, 0.10)?;
-                    terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
-                }
-                Key::MouseDrag { x, y } => {
-                    if let Some((last_x, last_y)) = self.last_drag {
-                        let dx = (last_x as f32 - x as f32) / terminal.canvas_cols() as f32;
-                        let dy = (last_y as f32 - y as f32) / terminal.canvas_rows() as f32;
-                        self.pan_current(dx, dy)?;
-                        terminal.display_view(self.current, &self.breadcrumbs, &mut self.store)?;
-                    }
-                    self.last_drag = Some((x, y));
-                }
-                Key::MouseRelease => {
-                    self.last_drag = None;
-                }
-                _ => {}
+                None => {}
             }
         }
 
         Ok(())
     }
 
-    fn reload(&mut self) -> Result<()> {
+    fn read_input_event(&self, terminal: &TerminalSession) -> Result<InputEvent> {
+        Ok(match read_key()? {
+            Key::MouseClick { x, y } => {
+                let (canvas_x, canvas_y) = terminal.mouse_canvas_point(x, y);
+                InputEvent::MouseClick { canvas_x, canvas_y }
+            }
+            Key::MouseWheelUp { x, y } => {
+                let (canvas_x, canvas_y) = terminal.mouse_canvas_point(x, y);
+                InputEvent::MouseWheelUp { canvas_x, canvas_y }
+            }
+            Key::MouseWheelDown { x, y } => {
+                let (canvas_x, canvas_y) = terminal.mouse_canvas_point(x, y);
+                InputEvent::MouseWheelDown { canvas_x, canvas_y }
+            }
+            key => InputEvent::from(key),
+        })
+    }
+
+    fn reload_store(&mut self) -> Result<()> {
         info!("reloading workspace {}", self.workspace.path.display());
         let exported = export_workspace(&self.workspace, &self.structurizr_cli, &self.svg_format)?;
         let views = discover_views(&exported)?;
         self.store = ViewStore::new(views, self.config.dpi_scale)?.with_export(exported);
-        self.current = ViewId::first();
-        self.breadcrumbs.clear();
-        self.last_drag = None;
-        Ok(())
-    }
-
-    fn is_key(&self, actual: char, configured: char) -> bool {
-        actual == configured || actual.eq_ignore_ascii_case(&configured)
-    }
-
-    fn zoom_current(&mut self, factor: f32, center: (f32, f32)) -> Result<()> {
-        let (width, height) = {
-            let rendered = self.store.rendered_view(self.current)?;
-            (rendered.width, rendered.height)
-        };
-        let transform = self
-            .store
-            .transform(self.current)
-            .zoomed(factor, center.0, center.1, width, height);
-        self.store.set_transform(self.current, transform);
-        Ok(())
-    }
-
-    fn pan_current(&mut self, dx_fraction: f32, dy_fraction: f32) -> Result<()> {
-        let (width, height) = {
-            let rendered = self.store.rendered_view(self.current)?;
-            (rendered.width, rendered.height)
-        };
-        let transform = self.store.transform(self.current);
-        let rect = transform.source_rect(width, height);
-        let dx = rect.width as f32 * dx_fraction;
-        let dy = rect.height as f32 * dy_fraction;
-        self.store
-            .set_transform(self.current, transform.panned(dx, dy, width, height));
         Ok(())
     }
 }
