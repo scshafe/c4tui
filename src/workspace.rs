@@ -123,13 +123,9 @@ pub fn discover_views(exported: &ExportedWorkspace) -> Result<Vec<ViewInfo>> {
             .to_owned();
         let meta = metadata.as_ref().and_then(|m| m.find_for_svg_stem(&stem));
         views.push(ViewInfo {
-            key: meta.map(|m| m.key.clone()).unwrap_or_else(|| stem.clone()),
-            name: meta
-                .map(|m| m.name.clone())
-                .unwrap_or_else(|| stem.replace('_', " ")),
-            view_type: meta
-                .map(|m| m.view_type.clone())
-                .unwrap_or_else(|| "Unknown".to_owned()),
+            key: meta.map_or_else(|| stem.clone(), |m| m.key.clone()),
+            name: meta.map_or_else(|| stem.replace('_', " "), |m| m.name.clone()),
+            view_type: meta.map_or_else(|| "Unknown".to_owned(), |m| m.view_type.clone()),
             svg_path,
             element_ids: meta.map(|m| m.element_ids.clone()).unwrap_or_default(),
             child_view_by_element_id: HashMap::new(),
@@ -326,7 +322,7 @@ fn push_views(
 fn normalize_view_key(value: &str) -> String {
     value
         .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
+        .filter(char::is_ascii_alphanumeric)
         .flat_map(char::to_lowercase)
         .collect()
 }

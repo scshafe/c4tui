@@ -20,7 +20,7 @@ pub struct Cli {
     #[arg(long)]
     pub config: Option<PathBuf>,
 
-    /// Write logs to this file. Logging level is controlled by RUST_LOG.
+    /// Write logs to this file. Logging level is controlled by `RUST_LOG`.
     #[arg(long)]
     pub log_file: Option<PathBuf>,
 

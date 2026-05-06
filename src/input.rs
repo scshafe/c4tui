@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::io;
 use std::time::{Duration, Instant};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
     Char(char),
     Up,

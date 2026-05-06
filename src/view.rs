@@ -1,7 +1,7 @@
 use crate::ids::ViewId;
 use crate::render::{render_svg, RenderedView};
 use crate::workspace::{ExportedWorkspace, ViewInfo};
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use std::collections::HashMap;
 
 #[derive(Debug)]
@@ -10,7 +10,7 @@ pub struct ViewStore {
     rendered: HashMap<ViewId, RenderedView>,
     transforms: HashMap<ViewId, ViewTransform>,
     dpi_scale: f32,
-    _export: Option<ExportedWorkspace>,
+    export_guard: Option<ExportedWorkspace>,
 }
 
 impl ViewStore {
@@ -24,16 +24,16 @@ impl ViewStore {
             rendered: HashMap::new(),
             transforms: HashMap::new(),
             dpi_scale: dpi_scale.clamp(1.0, 8.0),
-            _export: None,
+            export_guard: None,
         })
     }
 
     pub fn with_export(mut self, export: ExportedWorkspace) -> Self {
-        self._export = Some(export);
+        self.export_guard = Some(export);
         self
     }
 
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.views.len()
     }
 
@@ -47,7 +47,9 @@ impl ViewStore {
             self.rendered.insert(id, rendered);
         }
 
-        Ok(self.rendered.get(&id).expect("rendered view inserted"))
+        self.rendered
+            .get(&id)
+            .ok_or_else(|| anyhow!("rendered view was not cached after insertion"))
     }
 
     pub fn transform(&self, id: ViewId) -> ViewTransform {

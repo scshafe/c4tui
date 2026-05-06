@@ -109,7 +109,7 @@ impl Command {
         }
     }
 
-    pub fn with_canvas_size(self, canvas_cols: u16, canvas_rows: u16) -> Self {
+    pub const fn with_canvas_size(self, canvas_cols: u16, canvas_rows: u16) -> Self {
         match self {
             Self::DragTo { x, y, .. } => Self::DragTo {
                 x,

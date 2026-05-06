@@ -57,7 +57,7 @@ pub fn set_fd_flags(fd: libc::c_int, flags: libc::c_int) -> io::Result<()> {
     }
 }
 
-pub fn make_raw(termios: &mut libc::termios) {
+pub const fn make_raw(termios: &mut libc::termios) {
     termios.c_iflag &=
         !(libc::BRKINT | libc::ICRNL | libc::INPCK | libc::ISTRIP | libc::IXON | libc::PARMRK);
     termios.c_oflag &= !libc::OPOST;

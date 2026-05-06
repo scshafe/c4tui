@@ -53,9 +53,8 @@ impl TerminalSession {
         let view = store.view(index).clone();
         let (width, height) = {
             let rendered = store.rendered_view(index)?;
-            if !self.transmitted_images.contains(&image_id) {
+            if self.transmitted_images.insert(image_id) {
                 transmit_kitty_png(image_id, &rendered.png)?;
-                self.transmitted_images.insert(image_id);
             }
             (rendered.width, rendered.height)
         };
@@ -98,7 +97,7 @@ impl TerminalSession {
         self.rows.saturating_sub(1).max(1)
     }
 
-    pub fn size(&self) -> TerminalSize {
+    pub const fn size(&self) -> TerminalSize {
         TerminalSize {
             cols: self.cols,
             rows: self.rows,
@@ -107,8 +106,8 @@ impl TerminalSession {
 
     pub fn mouse_canvas_point(&self, x: u16, y: u16) -> (f32, f32) {
         (
-            (x.saturating_sub(1) as f32 / self.canvas_cols() as f32).clamp(0.0, 1.0),
-            (y.saturating_sub(2) as f32 / self.canvas_rows() as f32).clamp(0.0, 1.0),
+            (f32::from(x.saturating_sub(1)) / f32::from(self.canvas_cols())).clamp(0.0, 1.0),
+            (f32::from(y.saturating_sub(2)) / f32::from(self.canvas_rows())).clamp(0.0, 1.0),
         )
     }
 
@@ -137,7 +136,7 @@ impl TerminalSession {
     ) -> Result<Option<ViewId>> {
         let mut selected = current;
         loop {
-            self.draw_view_picker(store, selected)?;
+            Self::draw_view_picker(store, selected)?;
             match read_key()? {
                 Key::Up => {
                     selected = ViewId::new(selected.index().saturating_sub(1));
@@ -146,7 +145,7 @@ impl TerminalSession {
                     selected = ViewId::new((selected.index() + 1).min(store.len() - 1));
                 }
                 Key::Enter => return Ok(Some(selected)),
-                Key::Esc | Key::Char('q') | Key::Char('Q') => return Ok(None),
+                Key::Esc | Key::Char('q' | 'Q') => return Ok(None),
                 _ => {}
             }
         }
@@ -162,11 +161,11 @@ impl TerminalSession {
     }
 
     pub fn show_error(&mut self, title: &str, message: &str) -> Result<()> {
-        self.show_dialog(title, message, "Press any key to continue")
+        Self::show_dialog(title, message, "Press any key to continue")
     }
 
     pub fn show_message(&mut self, title: &str, message: &str) -> Result<()> {
-        self.show_dialog(title, message, "")
+        Self::show_dialog(title, message, "")
     }
 
     pub fn show_help(&mut self, keys: &KeyBindings) -> Result<()> {
@@ -180,27 +179,27 @@ impl TerminalSession {
             reset = keys.reset,
             fit = keys.fit,
         );
-        self.show_dialog("c4tui help", &help, "Press any key to continue")
+        Self::show_dialog("c4tui help", &help, "Press any key to continue")
     }
 
-    fn show_dialog(&mut self, title: &str, message: &str, footer: &str) -> Result<()> {
+    fn show_dialog(title: &str, message: &str, footer: &str) -> Result<()> {
         write_stdout_all(b"\x1b[2J\x1b[H")?;
         writeln!(io::stdout().lock(), "{title}\r")?;
         writeln!(io::stdout().lock(), "{}\r", "=".repeat(title.len().max(1)))?;
         for line in message.lines() {
             writeln!(io::stdout().lock(), "{line}\r")?;
         }
-        if !footer.is_empty() {
+        if footer.is_empty() {
+            io::stdout().flush()?;
+        } else {
             writeln!(io::stdout().lock(), "\r\n{footer}\r")?;
             io::stdout().flush()?;
             let _ = read_key()?;
-        } else {
-            io::stdout().flush()?;
         }
         Ok(())
     }
 
-    fn draw_view_picker(&mut self, store: &ViewStore, selected: ViewId) -> Result<()> {
+    fn draw_view_picker(store: &ViewStore, selected: ViewId) -> Result<()> {
         write_stdout_all(b"\x1b[2J\x1b[H")?;
         write_stdout_all(b"Select a view (Up/Down, Enter, Esc)\r\n\r\n")?;
 
@@ -226,35 +225,35 @@ impl TerminalSession {
 
 impl TerminalBackend for TerminalSession {
     fn size(&self) -> TerminalSize {
-        TerminalSession::size(self)
+        Self::size(self)
     }
 
     fn read_input(&mut self) -> Result<InputEvent> {
-        TerminalSession::read_input_event(self)
+        Self::read_input_event(self)
     }
 
     fn render(&mut self, frame: &RenderFrame, store: &mut ViewStore) -> Result<()> {
-        TerminalSession::display_frame(self, frame, store)
+        Self::display_frame(self, frame, store)
     }
 
     fn choose_view(&mut self, store: &ViewStore, current: ViewId) -> Result<Option<ViewId>> {
-        TerminalSession::open_view_picker(self, store, current)
+        Self::open_view_picker(self, store, current)
     }
 
     fn clear_image_cache(&mut self) -> Result<()> {
-        TerminalSession::clear_image_cache(self)
+        Self::clear_image_cache(self)
     }
 
     fn show_message(&mut self, title: &str, message: &str) -> Result<()> {
-        TerminalSession::show_message(self, title, message)
+        Self::show_message(self, title, message)
     }
 
     fn show_error(&mut self, title: &str, message: &str) -> Result<()> {
-        TerminalSession::show_error(self, title, message)
+        Self::show_error(self, title, message)
     }
 
     fn show_help(&mut self, keys: &KeyBindings) -> Result<()> {
-        TerminalSession::show_help(self, keys)
+        Self::show_help(self, keys)
     }
 }
 
@@ -286,7 +285,7 @@ fn transmit_kitty_png(image_id: u32, png: &[u8]) -> Result<()> {
     let mut chunks = encoded.as_bytes().chunks(4096).peekable();
 
     while let Some(chunk) = chunks.next() {
-        let more = if chunks.peek().is_some() { 1 } else { 0 };
+        let more = u8::from(chunks.peek().is_some());
         write!(
             io::stdout().lock(),
             "\x1b_Ga=t,f=100,i={image_id},m={more};{}\x1b\\",

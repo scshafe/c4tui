@@ -17,9 +17,9 @@ pub enum Support {
 impl fmt::Display for Support {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Support::Yes => f.write_str("yes"),
-            Support::No => f.write_str("no"),
-            Support::Unknown => f.write_str("unknown"),
+            Self::Yes => f.write_str("yes"),
+            Self::No => f.write_str("no"),
+            Self::Unknown => f.write_str("unknown"),
         }
     }
 }
@@ -122,7 +122,7 @@ impl TerminalProbeSession {
         let mut buf = [0_u8; 1024];
         loop {
             match unsafe { libc::read(self.stdin_fd, buf.as_mut_ptr().cast(), buf.len()) } {
-                n if n > 0 => continue,
+                n if n > 0 => {}
                 _ => break,
             }
         }
@@ -136,7 +136,7 @@ impl TerminalProbeSession {
         while Instant::now() < deadline {
             match unsafe { libc::read(self.stdin_fd, buf.as_mut_ptr().cast(), buf.len()) } {
                 n if n > 0 => {
-                    out.extend_from_slice(&buf[..n as usize]);
+                    out.extend_from_slice(&buf[..n.cast_unsigned()]);
                     if done(&out) {
                         break;
                     }
@@ -193,8 +193,8 @@ fn parse_decrpm_mode_response(response: &[u8], mode: u16) -> Support {
     let value = &rest[..end];
 
     match value.chars().next() {
-        Some('1') | Some('3') => Support::Yes,
-        Some('2') | Some('4') => Support::No,
+        Some('1' | '3') => Support::Yes,
+        Some('2' | '4') => Support::No,
         _ => Support::Unknown,
     }
 }

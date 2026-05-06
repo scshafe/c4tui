@@ -3,7 +3,7 @@ use crate::ids::ViewId;
 use crate::view::{ViewStore, ViewTransform};
 use anyhow::Result;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppState {
     current: ViewId,
     breadcrumbs: Vec<ViewId>,
@@ -21,7 +21,7 @@ impl Default for AppState {
 }
 
 impl AppState {
-    pub fn current(&self) -> ViewId {
+    pub const fn current(&self) -> ViewId {
         self.current
     }
 
@@ -98,8 +98,8 @@ impl AppState {
                 canvas_rows,
             } => {
                 if let Some((last_x, last_y)) = self.last_drag {
-                    let dx = (last_x as f32 - x as f32) / canvas_cols.max(1) as f32;
-                    let dy = (last_y as f32 - y as f32) / canvas_rows.max(1) as f32;
+                    let dx = (f32::from(last_x) - f32::from(x)) / f32::from(canvas_cols.max(1));
+                    let dy = (f32::from(last_y) - f32::from(y)) / f32::from(canvas_rows.max(1));
                     self.pan_current(store, dx, dy)?;
                 } else {
                     result.render = false;
@@ -136,15 +136,15 @@ impl AppState {
         Ok(())
     }
 
-    fn pan_current(&self, store: &mut ViewStore, dx_fraction: f32, dy_fraction: f32) -> Result<()> {
+    fn pan_current(&self, store: &mut ViewStore, horizontal: f32, vertical: f32) -> Result<()> {
         let (width, height) = {
             let rendered = store.rendered_view(self.current)?;
             (rendered.width, rendered.height)
         };
         let transform = store.transform(self.current);
         let rect = transform.source_rect(width, height);
-        let dx = rect.width as f32 * dx_fraction;
-        let dy = rect.height as f32 * dy_fraction;
+        let dx = rect.width as f32 * horizontal;
+        let dy = rect.height as f32 * vertical;
         store.set_transform(self.current, transform.panned(dx, dy, width, height));
         Ok(())
     }
