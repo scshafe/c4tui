@@ -19,14 +19,112 @@ pub struct ExportedWorkspace {
     workspace_json: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct WorkspaceModel {
+    pub elements: HashMap<ElementId, ElementMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ElementMetadata {
+    pub id: ElementId,
+    pub name: String,
+    pub description: Option<String>,
+    pub technology: Option<String>,
+    pub tags: Vec<String>,
+    pub kind: ElementKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ElementKind {
+    Person,
+    SoftwareSystem,
+    Container,
+    Component,
+    DeploymentNode,
+    InfrastructureNode,
+    SoftwareSystemInstance,
+    ContainerInstance,
+}
+
+impl ElementKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Person => "Person",
+            Self::SoftwareSystem => "Software System",
+            Self::Container => "Container",
+            Self::Component => "Component",
+            Self::DeploymentNode => "Deployment Node",
+            Self::InfrastructureNode => "Infrastructure Node",
+            Self::SoftwareSystemInstance => "Software System Instance",
+            Self::ContainerInstance => "Container Instance",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ViewKind {
+    SystemLandscape,
+    SystemContext,
+    Container,
+    Component,
+    Dynamic,
+    Deployment,
+    Filtered,
+    Custom,
+    Image,
+    Key,
+    Unknown,
+}
+
+impl ViewKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::SystemLandscape => "SystemLandscape",
+            Self::SystemContext => "SystemContext",
+            Self::Container => "Container",
+            Self::Component => "Component",
+            Self::Dynamic => "Dynamic",
+            Self::Deployment => "Deployment",
+            Self::Filtered => "Filtered",
+            Self::Custom => "Custom",
+            Self::Image => "Image",
+            Self::Key => "Key",
+            Self::Unknown => "Unknown",
+        }
+    }
+
+    pub fn parse(label: &str) -> Self {
+        match label {
+            "SystemLandscape" => Self::SystemLandscape,
+            "SystemContext" => Self::SystemContext,
+            "Container" => Self::Container,
+            "Component" => Self::Component,
+            "Dynamic" => Self::Dynamic,
+            "Deployment" => Self::Deployment,
+            "Filtered" => Self::Filtered,
+            "Custom" => Self::Custom,
+            "Image" => Self::Image,
+            "Key" => Self::Key,
+            _ => Self::Unknown,
+        }
+    }
+
+    pub const fn is_legend(self) -> bool {
+        matches!(self, Self::Key)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ViewInfo {
     pub key: String,
     pub name: String,
-    pub view_type: String,
+    pub kind: ViewKind,
+    pub description: Option<String>,
     pub svg_path: PathBuf,
     pub element_ids: HashSet<ElementId>,
     pub child_view_by_element_id: HashMap<ElementId, String>,
+    pub primary_view_key: Option<String>,
+    pub key_view_key: Option<String>,
 }
 
 pub fn resolve_workspace(input: &Path) -> Result<WorkspaceSource> {
@@ -105,6 +203,114 @@ fn find_workspace_json(workspace_path: &Path, output_dir: &Path) -> Option<PathB
     })
 }
 
+pub fn load_workspace_model(exported: &ExportedWorkspace) -> WorkspaceModel {
+    let Some(path) = exported.workspace_json.as_deref() else {
+        return WorkspaceModel::default();
+    };
+    let Ok(text) = fs::read_to_string(path) else {
+        return WorkspaceModel::default();
+    };
+    let Ok(raw): std::result::Result<StructurizrWorkspaceJson, _> = serde_json::from_str(&text)
+    else {
+        return WorkspaceModel::default();
+    };
+    let mut elements = HashMap::new();
+    if let Some(model) = raw.model {
+        for person in model.people.unwrap_or_default() {
+            insert_element(&mut elements, person, ElementKind::Person);
+        }
+        for system in model.software_systems.unwrap_or_default() {
+            for container in system.containers.clone().unwrap_or_default() {
+                for component in container.components.clone().unwrap_or_default() {
+                    insert_element(&mut elements, component, ElementKind::Component);
+                }
+                insert_element(&mut elements, container, ElementKind::Container);
+            }
+            insert_element(&mut elements, system, ElementKind::SoftwareSystem);
+        }
+        for node in model.deployment_nodes.unwrap_or_default() {
+            collect_deployment(&mut elements, node);
+        }
+    }
+    WorkspaceModel { elements }
+}
+
+fn collect_deployment(elements: &mut HashMap<ElementId, ElementMetadata>, node: StructurizrNodeJson) {
+    for instance in node.software_system_instances.clone().unwrap_or_default() {
+        insert_element(elements, instance, ElementKind::SoftwareSystemInstance);
+    }
+    for instance in node.container_instances.clone().unwrap_or_default() {
+        insert_element(elements, instance, ElementKind::ContainerInstance);
+    }
+    for child in node.children.clone().unwrap_or_default() {
+        collect_deployment(elements, child);
+    }
+    for infra in node.infrastructure_nodes.clone().unwrap_or_default() {
+        insert_element(elements, infra, ElementKind::InfrastructureNode);
+    }
+    insert_element(elements, node, ElementKind::DeploymentNode);
+}
+
+fn insert_element<T: ElementJson>(
+    map: &mut HashMap<ElementId, ElementMetadata>,
+    raw: T,
+    kind: ElementKind,
+) {
+    let id = ElementId::new(raw.id());
+    let entry = ElementMetadata {
+        id: id.clone(),
+        name: raw.name().to_owned(),
+        description: raw.description().map(str::to_owned).filter(|s| !s.is_empty()),
+        technology: raw.technology().map(str::to_owned).filter(|s| !s.is_empty()),
+        tags: raw
+            .tags_str()
+            .map(|s| s.split(',').map(|t| t.trim().to_owned()).filter(|t| !t.is_empty()).collect())
+            .unwrap_or_default(),
+        kind,
+    };
+    map.insert(id, entry);
+}
+
+trait ElementJson {
+    fn id(&self) -> &str;
+    fn name(&self) -> &str;
+    fn description(&self) -> Option<&str>;
+    fn technology(&self) -> Option<&str>;
+    fn tags_str(&self) -> Option<&str>;
+}
+
+impl ElementJson for StructurizrElementJson {
+    fn id(&self) -> &str { self.id.as_deref().unwrap_or("") }
+    fn name(&self) -> &str { self.name.as_deref().unwrap_or("") }
+    fn description(&self) -> Option<&str> { self.description.as_deref() }
+    fn technology(&self) -> Option<&str> { self.technology.as_deref() }
+    fn tags_str(&self) -> Option<&str> { self.tags.as_deref() }
+}
+
+impl ElementJson for StructurizrSystemJson {
+    fn id(&self) -> &str { self.id.as_deref().unwrap_or("") }
+    fn name(&self) -> &str { self.name.as_deref().unwrap_or("") }
+    fn description(&self) -> Option<&str> { self.description.as_deref() }
+    fn technology(&self) -> Option<&str> { None }
+    fn tags_str(&self) -> Option<&str> { self.tags.as_deref() }
+}
+
+impl ElementJson for StructurizrContainerJson {
+    fn id(&self) -> &str { self.id.as_deref().unwrap_or("") }
+    fn name(&self) -> &str { self.name.as_deref().unwrap_or("") }
+    fn description(&self) -> Option<&str> { self.description.as_deref() }
+    fn technology(&self) -> Option<&str> { self.technology.as_deref() }
+    fn tags_str(&self) -> Option<&str> { self.tags.as_deref() }
+}
+
+impl ElementJson for StructurizrNodeJson {
+    fn id(&self) -> &str { self.id.as_deref().unwrap_or("") }
+    fn name(&self) -> &str { self.name.as_deref().unwrap_or("") }
+    fn description(&self) -> Option<&str> { self.description.as_deref() }
+    fn technology(&self) -> Option<&str> { self.technology.as_deref() }
+    fn tags_str(&self) -> Option<&str> { self.tags.as_deref() }
+}
+
 pub fn discover_views(exported: &ExportedWorkspace) -> Result<Vec<ViewInfo>> {
     let mut svg_files = list_svg_files(&exported.output_dir)?;
     svg_files.sort();
@@ -121,20 +327,57 @@ pub fn discover_views(exported: &ExportedWorkspace) -> Result<Vec<ViewInfo>> {
             .and_then(|stem| stem.to_str())
             .unwrap_or("view")
             .to_owned();
-        let meta = metadata.as_ref().and_then(|m| m.find_for_svg_stem(&stem));
+        let is_legend = stem.ends_with("-key") || stem.ends_with("_key");
+        let primary_stem = if is_legend {
+            Some(stem.trim_end_matches("-key").trim_end_matches("_key").to_owned())
+        } else {
+            None
+        };
+        let meta_match_stem = primary_stem.clone().unwrap_or_else(|| stem.clone());
+        let meta = metadata.as_ref().and_then(|m| m.find_for_svg_stem(&meta_match_stem));
+        let kind = if is_legend {
+            ViewKind::Key
+        } else {
+            meta.map_or(ViewKind::Unknown, |m| ViewKind::parse(&m.view_type))
+        };
+        let display_name = if is_legend {
+            meta.map(|m| format!("{} (key)", m.name))
+                .unwrap_or_else(|| stem.replace('_', " "))
+        } else {
+            meta.map_or_else(|| stem.replace('_', " "), |m| m.name.clone())
+        };
         views.push(ViewInfo {
-            key: meta.map_or_else(|| stem.clone(), |m| m.key.clone()),
-            name: meta.map_or_else(|| stem.replace('_', " "), |m| m.name.clone()),
-            view_type: meta.map_or_else(|| "Unknown".to_owned(), |m| m.view_type.clone()),
+            key: stem.clone(),
+            name: display_name,
+            kind,
+            description: meta.and_then(|m| m.description.clone()),
             svg_path,
             element_ids: meta.map(|m| m.element_ids.clone()).unwrap_or_default(),
             child_view_by_element_id: HashMap::new(),
+            primary_view_key: primary_stem,
+            key_view_key: None,
         });
     }
 
     wire_child_views(&mut views, metadata.as_ref());
+    wire_key_views(&mut views);
 
     Ok(views)
+}
+
+fn wire_key_views(views: &mut [ViewInfo]) {
+    let primary_keys: Vec<(usize, String)> = views
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| v.kind == ViewKind::Key)
+        .filter_map(|(i, v)| v.primary_view_key.clone().map(|k| (i, k)))
+        .collect();
+    for (key_idx, primary_stem) in primary_keys {
+        if let Some(primary_idx) = views.iter().position(|v| v.key == primary_stem) {
+            let key_key = views[key_idx].key.clone();
+            views[primary_idx].key_view_key = Some(key_key);
+        }
+    }
 }
 
 fn wire_child_views(views: &mut [ViewInfo], metadata: Option<&ViewMetadata>) {
@@ -199,6 +442,7 @@ struct ViewMetadataEntry {
     key: String,
     name: String,
     view_type: String,
+    description: Option<String>,
     element_ids: HashSet<ElementId>,
     parent_element_id: Option<ElementId>,
 }
@@ -206,6 +450,59 @@ struct ViewMetadataEntry {
 #[derive(Debug, Deserialize)]
 struct StructurizrWorkspaceJson {
     views: Option<StructurizrViewsJson>,
+    model: Option<StructurizrModelJson>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StructurizrModelJson {
+    people: Option<Vec<StructurizrElementJson>>,
+    software_systems: Option<Vec<StructurizrSystemJson>>,
+    deployment_nodes: Option<Vec<StructurizrNodeJson>>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct StructurizrElementJson {
+    id: Option<String>,
+    name: Option<String>,
+    description: Option<String>,
+    technology: Option<String>,
+    tags: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct StructurizrSystemJson {
+    id: Option<String>,
+    name: Option<String>,
+    description: Option<String>,
+    tags: Option<String>,
+    containers: Option<Vec<StructurizrContainerJson>>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct StructurizrContainerJson {
+    id: Option<String>,
+    name: Option<String>,
+    description: Option<String>,
+    technology: Option<String>,
+    tags: Option<String>,
+    components: Option<Vec<StructurizrElementJson>>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct StructurizrNodeJson {
+    id: Option<String>,
+    name: Option<String>,
+    description: Option<String>,
+    technology: Option<String>,
+    tags: Option<String>,
+    children: Option<Vec<StructurizrNodeJson>>,
+    infrastructure_nodes: Option<Vec<StructurizrElementJson>>,
+    software_system_instances: Option<Vec<StructurizrElementJson>>,
+    container_instances: Option<Vec<StructurizrElementJson>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -227,6 +524,7 @@ struct StructurizrViewJson {
     key: Option<String>,
     name: Option<String>,
     title: Option<String>,
+    description: Option<String>,
     #[serde(default)]
     elements: Vec<StructurizrViewElementJson>,
     #[serde(default, rename = "softwareSystemId")]
@@ -297,7 +595,7 @@ fn push_views(
             .or_else(|| view.name.clone())
             .or_else(|| view.title.clone())
             .unwrap_or_else(|| "view".to_owned());
-        let name = view.title.or(view.name).unwrap_or_else(|| key.clone());
+        let name = view.title.clone().or(view.name.clone()).unwrap_or_else(|| key.clone());
         let parent_element_id = view
             .container_id
             .clone()
@@ -313,6 +611,7 @@ fn push_views(
             key,
             name,
             view_type: view_type.to_owned(),
+            description: view.description.filter(|s| !s.is_empty()),
             element_ids,
             parent_element_id,
         });

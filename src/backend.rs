@@ -1,31 +1,18 @@
 use crate::config::KeyBindings;
 use crate::event::InputEvent;
-use crate::ids::ViewId;
+use tui_kit::input::Key;
+use tui_kit::layout::CanvasMetrics;
+use crate::picker::ViewPicker;
 use crate::state::RenderFrame;
 use crate::view::ViewStore;
 use anyhow::Result;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TerminalSize {
-    pub cols: u16,
-    pub rows: u16,
-}
-
-impl TerminalSize {
-    pub fn canvas_cols(self) -> u16 {
-        self.cols.max(1)
-    }
-
-    pub fn canvas_rows(self) -> u16 {
-        self.rows.saturating_sub(1).max(1)
-    }
-}
-
 pub trait TerminalBackend {
-    fn size(&self) -> TerminalSize;
-    fn read_input(&mut self) -> Result<InputEvent>;
+    fn canvas_metrics(&self) -> CanvasMetrics;
+    fn translate_key(&self, key: Key) -> InputEvent;
     fn render(&mut self, frame: &RenderFrame, store: &mut ViewStore) -> Result<()>;
-    fn choose_view(&mut self, store: &ViewStore, current: ViewId) -> Result<Option<ViewId>>;
+    fn draw_picker(&mut self, picker: &ViewPicker, store: &ViewStore) -> Result<()>;
+    fn close_picker(&mut self, store: &ViewStore) -> Result<()>;
     fn clear_image_cache(&mut self) -> Result<()>;
     fn show_message(&mut self, title: &str, message: &str) -> Result<()>;
     fn show_error(&mut self, title: &str, message: &str) -> Result<()>;
@@ -35,11 +22,13 @@ pub trait TerminalBackend {
 #[cfg(test)]
 pub mod fake {
     use super::*;
+    use crate::ids::ViewId;
+    use tui_kit::layout::{CellPixel, CellSize};
     use std::collections::VecDeque;
 
     #[derive(Debug)]
     pub struct FakeTerminalBackend {
-        size: TerminalSize,
+        canvas: CanvasMetrics,
         inputs: VecDeque<InputEvent>,
         view_choices: VecDeque<Option<ViewId>>,
         pub rendered_frames: Vec<RenderFrame>,
@@ -47,12 +36,13 @@ pub mod fake {
         pub messages: Vec<(String, String)>,
         pub errors: Vec<(String, String)>,
         pub help_count: usize,
+        pub picker_draws: usize,
     }
 
     impl FakeTerminalBackend {
         pub fn new(inputs: impl IntoIterator<Item = InputEvent>) -> Self {
             Self {
-                size: TerminalSize { cols: 80, rows: 24 },
+                canvas: CanvasMetrics::new(CellSize::new(80, 24), CellPixel::new(8, 16)),
                 inputs: inputs.into_iter().collect(),
                 view_choices: VecDeque::new(),
                 rendered_frames: Vec::new(),
@@ -60,6 +50,7 @@ pub mod fake {
                 messages: Vec::new(),
                 errors: Vec::new(),
                 help_count: 0,
+                picker_draws: 0,
             }
         }
 
@@ -72,16 +63,21 @@ pub mod fake {
         }
     }
 
+    impl FakeTerminalBackend {
+        pub fn next_input(&mut self) -> InputEvent {
+            self.inputs
+                .pop_front()
+                .unwrap_or(InputEvent::Key(tui_kit::input::Key::CtrlC))
+        }
+    }
+
     impl TerminalBackend for FakeTerminalBackend {
-        fn size(&self) -> TerminalSize {
-            self.size
+        fn canvas_metrics(&self) -> CanvasMetrics {
+            self.canvas
         }
 
-        fn read_input(&mut self) -> Result<InputEvent> {
-            Ok(self
-                .inputs
-                .pop_front()
-                .unwrap_or(InputEvent::Key(crate::input::Key::CtrlC)))
+        fn translate_key(&self, key: tui_kit::input::Key) -> InputEvent {
+            InputEvent::from(key)
         }
 
         fn render(&mut self, frame: &RenderFrame, _store: &mut ViewStore) -> Result<()> {
@@ -89,8 +85,13 @@ pub mod fake {
             Ok(())
         }
 
-        fn choose_view(&mut self, _store: &ViewStore, _current: ViewId) -> Result<Option<ViewId>> {
-            Ok(self.view_choices.pop_front().unwrap_or(None))
+        fn draw_picker(&mut self, _picker: &ViewPicker, _store: &ViewStore) -> Result<()> {
+            self.picker_draws += 1;
+            Ok(())
+        }
+
+        fn close_picker(&mut self, _store: &ViewStore) -> Result<()> {
+            Ok(())
         }
 
         fn clear_image_cache(&mut self) -> Result<()> {

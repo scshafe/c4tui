@@ -28,7 +28,8 @@ pub struct Cli {
     #[arg(long, default_value_t = 200)]
     pub capability_timeout_ms: u64,
 
-    /// Print capability results even when stdout is not attached to a terminal.
+    /// Attempt the capability probe even without a controlling terminal; falls back to env-based
+    /// detection when no probe is possible instead of erroring.
     #[arg(long)]
     pub force_probe: bool,
 }

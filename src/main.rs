@@ -5,11 +5,13 @@ mod cli;
 mod config;
 mod event;
 mod ids;
-mod input;
+mod keymap;
+mod picker;
 mod render;
+mod render_pool;
 mod state;
+mod statusbar;
 mod terminal;
-mod tty;
 mod view;
 mod workspace;
 
@@ -21,13 +23,16 @@ use cli::Cli;
 use config::load_config;
 use env_logger::Env;
 use log::info;
+use render::RasterBudget;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 use terminal::TerminalSession;
 use view::ViewStore;
-use workspace::{discover_views, export_workspace, resolve_workspace};
+use workspace::{
+    discover_views, export_workspace, load_workspace_model, resolve_workspace, WorkspaceSource,
+};
 
 fn main() {
     if let Err(error) = run() {
@@ -40,7 +45,10 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     init_logging(cli.log_file.as_deref())?;
     let config = load_config(cli.config.as_deref())?;
-    info!("starting c4tui with dpi_scale={}", config.dpi_scale);
+    info!(
+        "starting c4tui with raster_quality={}, max_raster_pixels={}",
+        config.raster_budget.quality, config.raster_budget.max_pixels
+    );
     let timeout = Duration::from_millis(cli.capability_timeout_ms);
     let capabilities = detect_capabilities(timeout, cli.force_probe)
         .context("failed to detect terminal capabilities")?;
@@ -65,12 +73,13 @@ fn run() -> Result<()> {
     let structurizr_cli = cli
         .structurizr_cli
         .unwrap_or_else(|| PathBuf::from("structurizr-cli"));
-    let mut terminal = TerminalSession::enter()?;
+    let mut terminal = TerminalSession::enter(config.clone())?;
+    terminal.set_workspace_path(workspace.path.clone());
     let view_store = match load_view_store(
         &workspace,
         &structurizr_cli,
         &cli.svg_format,
-        config.dpi_scale,
+        config.raster_budget,
     ) {
         Ok(store) => store,
         Err(error) => {
@@ -78,27 +87,48 @@ fn run() -> Result<()> {
             return Err(error);
         }
     };
+    let (event_tx, event_rx) = std::sync::mpsc::channel();
+    tui_kit::input_thread::spawn(event_tx.clone());
+    let watcher = if config.watch_workspace {
+        let workspace_path = workspace.path.clone();
+        match tui_kit::watcher::WorkspaceWatcher::spawn(
+            &[workspace_path.as_path()],
+            event_tx.clone(),
+            Duration::from_millis(config.watch_debounce_ms),
+        ) {
+            Ok(w) => Some(w),
+            Err(error) => {
+                log::warn!("file watcher disabled: {error:#}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let _watcher = watcher;
     let mut app = App::new(
         view_store,
         workspace,
         structurizr_cli,
         cli.svg_format,
         config,
+        event_tx,
     );
-    app.run(&mut terminal)?;
+    app.run(&mut terminal, event_rx)?;
 
     Ok(())
 }
 
 fn load_view_store(
-    workspace: &workspace::WorkspaceSource,
+    workspace: &WorkspaceSource,
     structurizr_cli: &std::path::Path,
     svg_format: &str,
-    dpi_scale: f32,
+    budget: RasterBudget,
 ) -> Result<ViewStore> {
     let exported = export_workspace(workspace, structurizr_cli, svg_format)?;
     let views = discover_views(&exported)?;
-    ViewStore::new(views, dpi_scale).map(|store| store.with_export(exported))
+    let model = load_workspace_model(&exported);
+    ViewStore::new(views, budget).map(|store| store.with_model(model).with_export(exported))
 }
 
 fn init_logging(log_file: Option<&std::path::Path>) -> Result<()> {
@@ -118,3 +148,4 @@ fn init_logging(log_file: Option<&std::path::Path>) -> Result<()> {
     std::io::stderr().flush().ok();
     Ok(())
 }
+

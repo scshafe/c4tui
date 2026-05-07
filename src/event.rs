@@ -1,6 +1,6 @@
-use crate::config::AppConfig;
 use crate::ids::ViewId;
-use crate::input::Key;
+use tui_kit::input::Key;
+use tui_kit::layout::CanvasMetrics;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InputEvent {
@@ -12,7 +12,71 @@ pub enum InputEvent {
     MouseRelease,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum PendingCommand {
+    Quit,
+    OpenPicker,
+    Reload,
+    Help,
+    Back,
+    ShowLegend,
+    Inspect,
+    ClearOrQuit,
+    Pan { dx_fraction: f32, dy_fraction: f32 },
+    Zoom { factor: f32 },
+    ZoomAt { factor: f32, canvas_x: f32, canvas_y: f32 },
+    ResetView,
+    DrillAt { canvas_x: f32, canvas_y: f32 },
+    DragTo { x: u16, y: u16 },
+    EndDrag,
+    Noop,
+}
+
+impl PendingCommand {
+    pub fn resolve(self, canvas: CanvasMetrics) -> Command {
+        match self {
+            Self::Quit => Command::Quit,
+            Self::OpenPicker => Command::OpenPicker,
+            Self::Reload => Command::Reload,
+            Self::Help => Command::Help,
+            Self::Back => Command::Back,
+            Self::ShowLegend => Command::ShowLegend,
+            Self::Inspect => Command::InspectAt {
+                canvas_x: 0.5,
+                canvas_y: 0.5,
+            },
+            Self::ClearOrQuit => Command::ClearOrQuit,
+            Self::Pan { dx_fraction, dy_fraction } => Command::Pan { dx_fraction, dy_fraction },
+            Self::Zoom { factor } => Command::Zoom { factor, anchor: ZoomAnchor::Center },
+            Self::ZoomAt { factor, canvas_x, canvas_y } => Command::Zoom {
+                factor,
+                anchor: ZoomAnchor::Canvas { canvas_x, canvas_y },
+            },
+            Self::ResetView => Command::ResetView,
+            Self::DrillAt { canvas_x, canvas_y } => Command::DrillAt { canvas_x, canvas_y },
+            Self::DragTo { x, y } => Command::DragTo { x, y, canvas },
+            Self::EndDrag => Command::EndDrag,
+            Self::Noop => Command::Noop,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ZoomAnchor {
+    Center,
+    Canvas { canvas_x: f32, canvas_y: f32 },
+}
+
+impl ZoomAnchor {
+    pub fn coordinates(self) -> (f32, f32) {
+        match self {
+            Self::Center => (0.5, 0.5),
+            Self::Canvas { canvas_x, canvas_y } => (canvas_x, canvas_y),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     Quit,
     OpenPicker,
@@ -22,108 +86,16 @@ pub enum Command {
     ReloadFailed,
     Help,
     Back,
-    DrillAt {
-        canvas_x: f32,
-        canvas_y: f32,
-    },
-    Zoom {
-        factor: f32,
-        center: (f32, f32),
-    },
+    ShowLegend,
+    InspectAt { canvas_x: f32, canvas_y: f32 },
+    ClearOrQuit,
+    DrillAt { canvas_x: f32, canvas_y: f32 },
+    Zoom { factor: f32, anchor: ZoomAnchor },
     ResetView,
-    Pan {
-        dx_fraction: f32,
-        dy_fraction: f32,
-    },
-    DragTo {
-        x: u16,
-        y: u16,
-        canvas_cols: u16,
-        canvas_rows: u16,
-    },
+    Pan { dx_fraction: f32, dy_fraction: f32 },
+    DragTo { x: u16, y: u16, canvas: CanvasMetrics },
     EndDrag,
     Noop,
-}
-
-impl Command {
-    pub fn from_input(event: InputEvent, config: &AppConfig) -> Self {
-        match event {
-            InputEvent::Key(Key::Char(ch)) if is_key(ch, config.keys.quit) => Self::Quit,
-            InputEvent::Key(Key::CtrlC | Key::Esc) => Self::Quit,
-            InputEvent::Key(Key::Char(ch)) if is_key(ch, config.keys.open_picker) => {
-                Self::OpenPicker
-            }
-            InputEvent::Key(Key::Char(ch)) if is_key(ch, config.keys.reload) => Self::Reload,
-            InputEvent::Key(Key::Char(ch)) if is_key(ch, config.keys.help) => Self::Help,
-            InputEvent::Key(Key::Back) => Self::Back,
-            InputEvent::Key(Key::Char(ch)) if ch == config.keys.zoom_in || ch == '=' => {
-                Self::Zoom {
-                    factor: 1.25,
-                    center: (0.5, 0.5),
-                }
-            }
-            InputEvent::Key(Key::Char(ch)) if ch == config.keys.zoom_out || ch == '_' => {
-                Self::Zoom {
-                    factor: 0.8,
-                    center: (0.5, 0.5),
-                }
-            }
-            InputEvent::MouseWheelUp { canvas_x, canvas_y } => Self::Zoom {
-                factor: 1.25,
-                center: (canvas_x, canvas_y),
-            },
-            InputEvent::MouseWheelDown { canvas_x, canvas_y } => Self::Zoom {
-                factor: 0.8,
-                center: (canvas_x, canvas_y),
-            },
-            InputEvent::Key(Key::Char(ch))
-                if is_key(ch, config.keys.reset) || is_key(ch, config.keys.fit) =>
-            {
-                Self::ResetView
-            }
-            InputEvent::Key(Key::Left) => Self::Pan {
-                dx_fraction: -0.10,
-                dy_fraction: 0.0,
-            },
-            InputEvent::Key(Key::Right) => Self::Pan {
-                dx_fraction: 0.10,
-                dy_fraction: 0.0,
-            },
-            InputEvent::Key(Key::Up) => Self::Pan {
-                dx_fraction: 0.0,
-                dy_fraction: -0.10,
-            },
-            InputEvent::Key(Key::Down) => Self::Pan {
-                dx_fraction: 0.0,
-                dy_fraction: 0.10,
-            },
-            InputEvent::MouseClick { canvas_x, canvas_y } => Self::DrillAt { canvas_x, canvas_y },
-            InputEvent::MouseDrag { x, y } => Self::DragTo {
-                x,
-                y,
-                canvas_cols: 1,
-                canvas_rows: 1,
-            },
-            InputEvent::MouseRelease => Self::EndDrag,
-            InputEvent::Key(_) => Self::Noop,
-        }
-    }
-
-    pub const fn with_canvas_size(self, canvas_cols: u16, canvas_rows: u16) -> Self {
-        match self {
-            Self::DragTo { x, y, .. } => Self::DragTo {
-                x,
-                y,
-                canvas_cols,
-                canvas_rows,
-            },
-            other => other,
-        }
-    }
-}
-
-fn is_key(actual: char, configured: char) -> bool {
-    actual == configured || actual.eq_ignore_ascii_case(&configured)
 }
 
 impl From<Key> for InputEvent {

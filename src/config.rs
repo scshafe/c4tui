@@ -1,3 +1,4 @@
+use crate::render::{Background, RasterBudget};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::fs;
@@ -5,15 +6,19 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppConfig {
-    pub dpi_scale: f32,
+    pub raster_budget: RasterBudget,
     pub keys: KeyBindings,
+    pub watch_workspace: bool,
+    pub watch_debounce_ms: u64,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            dpi_scale: 4.0,
+            raster_budget: RasterBudget::default(),
             keys: KeyBindings::default(),
+            watch_workspace: true,
+            watch_debounce_ms: 250,
         }
     }
 }
@@ -48,6 +53,13 @@ impl Default for KeyBindings {
 #[derive(Debug, Deserialize)]
 struct RawConfig {
     dpi_scale: Option<f32>,
+    render_quality: Option<f32>,
+    max_raster_megapixels: Option<f32>,
+    crop_to_content: Option<bool>,
+    content_padding: Option<f32>,
+    background: Option<String>,
+    watch_workspace: Option<bool>,
+    watch_debounce_ms: Option<u64>,
     keybindings: Option<RawKeyBindings>,
 }
 
@@ -80,8 +92,32 @@ pub fn load_config(path: Option<&Path>) -> Result<AppConfig> {
         .with_context(|| format!("failed to read config file {}", path.display()))?;
     let raw: RawConfig = toml::from_str(&text)
         .with_context(|| format!("failed to parse config file {}", path.display()))?;
-    if let Some(dpi_scale) = raw.dpi_scale {
-        config.dpi_scale = dpi_scale.clamp(1.0, 8.0);
+
+    let quality = raw
+        .render_quality
+        .or(raw.dpi_scale)
+        .map(|q| q.clamp(0.25, 8.0));
+    if let Some(quality) = quality {
+        config.raster_budget.quality = quality;
+    }
+    if let Some(megapixels) = raw.max_raster_megapixels {
+        let pixels = (megapixels.clamp(0.5, 64.0) * 1_000_000.0).round() as u64;
+        config.raster_budget.max_pixels = pixels.max(500_000);
+    }
+    if let Some(crop) = raw.crop_to_content {
+        config.raster_budget.crop_to_content = crop;
+    }
+    if let Some(padding) = raw.content_padding {
+        config.raster_budget.content_padding_fraction = padding.clamp(0.0, 0.5);
+    }
+    if let Some(background) = raw.background {
+        config.raster_budget.background = parse_background(&background);
+    }
+    if let Some(watch) = raw.watch_workspace {
+        config.watch_workspace = watch;
+    }
+    if let Some(debounce) = raw.watch_debounce_ms {
+        config.watch_debounce_ms = debounce.clamp(50, 5_000);
     }
     if let Some(keys) = raw.keybindings {
         apply_keybindings(&mut config.keys, keys);
@@ -100,6 +136,43 @@ fn apply_keybindings(keys: &mut KeyBindings, raw: RawKeyBindings) {
     assign(&mut keys.fit, raw.fit);
 }
 
+fn parse_background(value: &str) -> Background {
+    let trimmed = value.trim().to_ascii_lowercase();
+    match trimmed.as_str() {
+        "auto" => Background::Auto,
+        "transparent" | "none" => Background::Transparent,
+        "white" => Background::Color(255, 255, 255, 255),
+        "black" => Background::Color(0, 0, 0, 255),
+        _ => {
+            if let Some(hex) = trimmed.strip_prefix('#') {
+                if let Some(parsed) = parse_hex(hex) {
+                    return Background::Color(parsed.0, parsed.1, parsed.2, parsed.3);
+                }
+            }
+            Background::Auto
+        }
+    }
+}
+
+fn parse_hex(hex: &str) -> Option<(u8, u8, u8, u8)> {
+    match hex.len() {
+        6 => {
+            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+            Some((r, g, b, 255))
+        }
+        8 => {
+            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+            let a = u8::from_str_radix(&hex[6..8], 16).ok()?;
+            Some((r, g, b, a))
+        }
+        _ => None,
+    }
+}
+
 fn assign(target: &mut char, value: Option<String>) {
     if let Some(ch) = value.and_then(|value| value.chars().next()) {
         *target = ch;
@@ -111,12 +184,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn loads_config_with_dpi_and_keybindings() {
+    fn loads_config_with_quality_and_keybindings() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         fs::write(
             &path,
-            r#"dpi_scale = 2.5
+            r#"render_quality = 2.5
+max_raster_megapixels = 6.0
 
 [keybindings]
 quit = "x"
@@ -126,9 +200,19 @@ reload = "R"
         .unwrap();
 
         let config = load_config(Some(&path)).unwrap();
-        assert_eq!(config.dpi_scale, 2.5);
+        assert!((config.raster_budget.quality - 2.5).abs() < 0.001);
+        assert_eq!(config.raster_budget.max_pixels, 6_000_000);
         assert_eq!(config.keys.quit, 'x');
         assert_eq!(config.keys.reload, 'R');
         assert_eq!(config.keys.open_picker, 'o');
+    }
+
+    #[test]
+    fn legacy_dpi_scale_is_honored_for_quality() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "dpi_scale = 1.0\n").unwrap();
+        let config = load_config(Some(&path)).unwrap();
+        assert!((config.raster_budget.quality - 1.0).abs() < 0.001);
     }
 }

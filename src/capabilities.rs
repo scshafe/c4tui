@@ -1,6 +1,5 @@
-use crate::tty::{
-    get_fd_flags, get_termios, make_raw, set_fd_flags, set_termios, stdin_is_terminal,
-    stdout_is_terminal, write_stdout_all,
+use tui_kit::tty::{
+    get_termios, make_raw, set_termios, stdin_is_terminal, stdout_is_terminal, write_stdout_all,
 };
 use std::env;
 use std::fmt;
@@ -32,42 +31,82 @@ pub struct Capabilities {
 }
 
 pub fn detect_capabilities(timeout: Duration, force_probe: bool) -> io::Result<Capabilities> {
-    let truecolor = detect_truecolor();
+    let baseline = env_capabilities();
 
-    if !force_probe && (!stdout_is_terminal() || !stdin_is_terminal()) {
-        return Ok(Capabilities {
-            kitty_graphics: Support::Unknown,
-            pixel_mouse: Support::Unknown,
-            truecolor,
-        });
+    let probe_possible = stdin_is_terminal() && stdout_is_terminal();
+    if !probe_possible {
+        return Ok(baseline);
     }
 
-    let mut session = TerminalProbeSession::new()?;
-    let kitty_graphics = session.query_kitty_graphics(timeout)?;
-    let pixel_mouse = session.query_sgr_pixel_mouse(timeout)?;
+    let mut session = match TerminalProbeSession::new() {
+        Ok(session) => session,
+        Err(error) if force_probe => {
+            log::warn!("capability probe unavailable ({error}); falling back to env detection");
+            return Ok(baseline);
+        }
+        Err(error) => return Err(error),
+    };
+    let kitty_graphics =
+        merge_support(baseline.kitty_graphics, session.query_kitty_graphics(timeout)?);
+    let pixel_mouse =
+        merge_support(baseline.pixel_mouse, session.query_sgr_pixel_mouse(timeout)?);
 
     Ok(Capabilities {
         kitty_graphics,
         pixel_mouse,
-        truecolor,
+        truecolor: baseline.truecolor,
     })
 }
 
-fn detect_truecolor() -> Support {
+fn merge_support(env: Support, probed: Support) -> Support {
+    match probed {
+        Support::Unknown => env,
+        decided => decided,
+    }
+}
+
+fn env_capabilities() -> Capabilities {
+    let term_program = env::var("TERM_PROGRAM").unwrap_or_default();
+    let term = env::var("TERM").unwrap_or_default().to_ascii_lowercase();
+    Capabilities {
+        kitty_graphics: detect_kitty_graphics_env(&term_program, &term),
+        pixel_mouse: detect_pixel_mouse_env(&term_program, &term),
+        truecolor: detect_truecolor_env(&term_program, &term),
+    }
+}
+
+fn detect_truecolor_env(term_program: &str, term: &str) -> Support {
     let colorterm = env::var("COLORTERM")
         .unwrap_or_default()
         .to_ascii_lowercase();
     if matches!(colorterm.as_str(), "truecolor" | "24bit") {
         return Support::Yes;
     }
-
-    let term = env::var("TERM").unwrap_or_default().to_ascii_lowercase();
     if term.contains("truecolor") || term.contains("24bit") {
         return Support::Yes;
     }
-
-    match env::var("TERM_PROGRAM").unwrap_or_default().as_str() {
+    match term_program {
         "WezTerm" | "ghostty" | "Ghostty" | "iTerm.app" | "kitty" => Support::Yes,
+        _ => Support::Unknown,
+    }
+}
+
+fn detect_kitty_graphics_env(term_program: &str, term: &str) -> Support {
+    if env::var_os("KITTY_WINDOW_ID").is_some() {
+        return Support::Yes;
+    }
+    if term.contains("kitty") || term.contains("ghostty") {
+        return Support::Yes;
+    }
+    match term_program {
+        "WezTerm" | "ghostty" | "Ghostty" | "kitty" => Support::Yes,
+        _ => Support::Unknown,
+    }
+}
+
+fn detect_pixel_mouse_env(term_program: &str, _term: &str) -> Support {
+    match term_program {
+        "WezTerm" | "ghostty" | "Ghostty" | "kitty" | "iTerm.app" => Support::Yes,
         _ => Support::Unknown,
     }
 }
@@ -75,24 +114,20 @@ fn detect_truecolor() -> Support {
 struct TerminalProbeSession {
     stdin_fd: libc::c_int,
     original_termios: libc::termios,
-    original_flags: libc::c_int,
 }
 
 impl TerminalProbeSession {
     fn new() -> io::Result<Self> {
         let stdin_fd = libc::STDIN_FILENO;
         let original_termios = get_termios(stdin_fd)?;
-        let original_flags = get_fd_flags(stdin_fd)?;
 
         let mut raw = original_termios;
         make_raw(&mut raw);
         set_termios(stdin_fd, &raw)?;
-        set_fd_flags(stdin_fd, original_flags | libc::O_NONBLOCK)?;
 
         Ok(Self {
             stdin_fd,
             original_termios,
-            original_flags,
         })
     }
 
@@ -100,7 +135,9 @@ impl TerminalProbeSession {
         self.drain_input();
 
         write_stdout_all(b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\")?;
-        let response = self.read_until(timeout, |bytes| bytes.windows(4).any(|w| w == b"\x1b_G"));
+        let response = self.read_until(timeout, |bytes| {
+            bytes.windows(3).any(|w| w == b"\x1b_G") && bytes.windows(2).any(|w| w == b"\x1b\\")
+        });
 
         Ok(parse_kitty_graphics_response(&response))
     }
@@ -141,14 +178,14 @@ impl TerminalProbeSession {
                         break;
                     }
                 }
-                -1 => {
+                0 => std::thread::sleep(Duration::from_millis(5)),
+                _ => {
                     let err = io::Error::last_os_error();
                     if err.kind() != io::ErrorKind::WouldBlock {
                         break;
                     }
                     std::thread::sleep(Duration::from_millis(5));
                 }
-                _ => break,
             }
         }
 
@@ -159,7 +196,6 @@ impl TerminalProbeSession {
 impl Drop for TerminalProbeSession {
     fn drop(&mut self) {
         let _ = write_stdout_all(b"\x1b[?1016l");
-        let _ = set_fd_flags(self.stdin_fd, self.original_flags);
         let _ = set_termios(self.stdin_fd, &self.original_termios);
     }
 }
@@ -235,5 +271,24 @@ mod tests {
     #[test]
     fn parses_absent_decrpm_as_no() {
         assert_eq!(parse_decrpm_mode_response(b"", 1016), Support::No);
+    }
+
+    #[test]
+    fn kitty_done_predicate_matches_three_byte_marker() {
+        let predicate = |bytes: &[u8]| {
+            bytes.windows(3).any(|w| w == b"\x1b_G")
+                && bytes.windows(2).any(|w| w == b"\x1b\\")
+        };
+        assert!(predicate(b"\x1b_Gi=31;OK\x1b\\"));
+        assert!(!predicate(b"\x1b_G"));
+        assert!(!predicate(b""));
+    }
+
+    #[test]
+    fn merge_support_prefers_probed_decision() {
+        assert_eq!(merge_support(Support::Yes, Support::No), Support::No);
+        assert_eq!(merge_support(Support::No, Support::Yes), Support::Yes);
+        assert_eq!(merge_support(Support::Yes, Support::Unknown), Support::Yes);
+        assert_eq!(merge_support(Support::Unknown, Support::Unknown), Support::Unknown);
     }
 }

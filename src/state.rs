@@ -1,6 +1,7 @@
-use crate::event::Command;
-use crate::ids::ViewId;
-use crate::view::{ViewStore, ViewTransform};
+use crate::event::{Command, ZoomAnchor};
+use crate::ids::{ElementId, ViewId};
+use tui_kit::layout::{CanvasMetrics, ViewTransform};
+use crate::view::ViewStore;
 use anyhow::Result;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -8,6 +9,7 @@ pub struct AppState {
     current: ViewId,
     breadcrumbs: Vec<ViewId>,
     last_drag: Option<(u16, u16)>,
+    pinned_element: Option<ElementId>,
 }
 
 impl Default for AppState {
@@ -16,6 +18,7 @@ impl Default for AppState {
             current: ViewId::first(),
             breadcrumbs: Vec::new(),
             last_drag: None,
+            pinned_element: None,
         }
     }
 }
@@ -25,15 +28,29 @@ impl AppState {
         self.current
     }
 
+    pub fn pinned_element(&self) -> Option<&ElementId> {
+        self.pinned_element.as_ref()
+    }
+
     pub fn render_frame(&self) -> RenderFrame {
         RenderFrame {
             current: self.current,
             breadcrumbs: self.breadcrumbs.clone(),
+            pinned_element: self.pinned_element.clone(),
+            render_progress: None,
         }
     }
 
-    pub fn apply(&mut self, command: Command, store: &mut ViewStore) -> Result<UpdateResult> {
-        let mut result = UpdateResult::default();
+    pub fn apply(
+        &mut self,
+        command: Command,
+        store: &mut ViewStore,
+        canvas: CanvasMetrics,
+    ) -> Result<UpdateResult> {
+        let mut result = UpdateResult {
+            canvas,
+            ..UpdateResult::default()
+        };
 
         match command {
             Command::Quit => {
@@ -47,6 +64,7 @@ impl AppState {
             Command::SelectView(next) => {
                 self.current = next;
                 self.breadcrumbs.clear();
+                self.pinned_element = None;
             }
             Command::Reload => {
                 result.effect = Some(Effect::ReloadWorkspace);
@@ -66,41 +84,80 @@ impl AppState {
             Command::Back => {
                 if let Some(previous) = self.breadcrumbs.pop() {
                     self.current = previous;
+                    self.pinned_element = None;
                 }
             }
+            Command::ShowLegend => {
+                let Some(legend_key) = store.view(self.current).key_view_key.clone() else {
+                    result.render = false;
+                    return Ok(result);
+                };
+                let Some(target) = store
+                    .views
+                    .iter()
+                    .position(|v| v.key == legend_key)
+                    .map(ViewId::new)
+                else {
+                    result.render = false;
+                    return Ok(result);
+                };
+                self.breadcrumbs.push(self.current);
+                self.current = target;
+                self.last_drag = None;
+                self.pinned_element = None;
+            }
             Command::DrillAt { canvas_x, canvas_y } => {
-                if let Some(child) =
-                    store.child_view_at_canvas_point(self.current, canvas_x, canvas_y)?
-                {
+                if let Some(child) = store.child_view_at_canvas_point(
+                    self.current,
+                    canvas_x,
+                    canvas_y,
+                    canvas,
+                )? {
                     self.breadcrumbs.push(self.current);
                     self.current = child;
                     self.last_drag = None;
+                } else if let Some(element) =
+                    store.element_at_canvas_point(self.current, canvas_x, canvas_y, canvas)?
+                {
+                    self.pinned_element = Some(element);
                 } else {
                     result.render = false;
                 }
             }
-            Command::Zoom { factor, center } => {
-                self.zoom_current(store, factor, center)?;
+            Command::InspectAt { canvas_x, canvas_y } => {
+                self.pinned_element =
+                    store.element_at_canvas_point(self.current, canvas_x, canvas_y, canvas)?;
+                if self.pinned_element.is_none() {
+                    result.render = false;
+                }
+            }
+            Command::ClearOrQuit => {
+                if self.pinned_element.is_some() {
+                    self.pinned_element = None;
+                } else {
+                    result.effect = Some(Effect::Quit);
+                    result.render = false;
+                }
+            }
+            Command::Zoom { factor, anchor } => {
+                self.zoom_current(store, factor, anchor, canvas)?;
             }
             Command::ResetView => {
-                store.set_transform(self.current, ViewTransform::reset());
+                store.set_transform(self.current, ViewTransform::fit());
             }
             Command::Pan {
                 dx_fraction,
                 dy_fraction,
             } => {
-                self.pan_current(store, dx_fraction, dy_fraction)?;
+                self.pan_current(store, dx_fraction, dy_fraction, canvas)?;
             }
-            Command::DragTo {
-                x,
-                y,
-                canvas_cols,
-                canvas_rows,
-            } => {
+            Command::DragTo { x, y, canvas: drag_canvas } => {
                 if let Some((last_x, last_y)) = self.last_drag {
-                    let dx = (f32::from(last_x) - f32::from(x)) / f32::from(canvas_cols.max(1));
-                    let dy = (f32::from(last_y) - f32::from(y)) / f32::from(canvas_rows.max(1));
-                    self.pan_current(store, dx, dy)?;
+                    let canvas_cols = drag_canvas.cells.cols.max(1);
+                    let canvas_rows = drag_canvas.cells.rows.max(1);
+                    let dx = (f32::from(last_x) - f32::from(x)) / f32::from(canvas_cols);
+                    let dy = (f32::from(last_y) - f32::from(y)) / f32::from(canvas_rows);
+                    self.pan_current(store, dx, dy, drag_canvas)?;
                 } else {
                     result.render = false;
                 }
@@ -122,30 +179,37 @@ impl AppState {
         self.current = ViewId::first();
         self.breadcrumbs.clear();
         self.last_drag = None;
+        self.pinned_element = None;
     }
 
-    fn zoom_current(&self, store: &mut ViewStore, factor: f32, center: (f32, f32)) -> Result<()> {
-        let (width, height) = {
-            let rendered = store.rendered_view(self.current)?;
-            (rendered.width, rendered.height)
-        };
+    fn zoom_current(
+        &self,
+        store: &mut ViewStore,
+        factor: f32,
+        anchor: ZoomAnchor,
+        canvas: CanvasMetrics,
+    ) -> Result<()> {
+        let raster = store.rendered_view(self.current)?.raster_size;
+        let (anchor_x, anchor_y) = anchor.coordinates();
         let transform = store
             .transform(self.current)
-            .zoomed(factor, center.0, center.1, width, height);
+            .zoomed_at(factor, anchor_x, anchor_y, raster, canvas);
         store.set_transform(self.current, transform);
         Ok(())
     }
 
-    fn pan_current(&self, store: &mut ViewStore, horizontal: f32, vertical: f32) -> Result<()> {
-        let (width, height) = {
-            let rendered = store.rendered_view(self.current)?;
-            (rendered.width, rendered.height)
-        };
-        let transform = store.transform(self.current);
-        let rect = transform.source_rect(width, height);
-        let dx = rect.width as f32 * horizontal;
-        let dy = rect.height as f32 * vertical;
-        store.set_transform(self.current, transform.panned(dx, dy, width, height));
+    fn pan_current(
+        &self,
+        store: &mut ViewStore,
+        horizontal: f32,
+        vertical: f32,
+        canvas: CanvasMetrics,
+    ) -> Result<()> {
+        let raster = store.rendered_view(self.current)?.raster_size;
+        let transform = store
+            .transform(self.current)
+            .panned(horizontal, vertical, raster, canvas);
+        store.set_transform(self.current, transform);
         Ok(())
     }
 }
@@ -154,12 +218,15 @@ impl AppState {
 pub struct RenderFrame {
     pub current: ViewId,
     pub breadcrumbs: Vec<ViewId>,
+    pub pinned_element: Option<ElementId>,
+    pub render_progress: Option<(usize, usize)>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct UpdateResult {
     pub effect: Option<Effect>,
     pub render: bool,
+    pub canvas: CanvasMetrics,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,6 +243,10 @@ impl Default for UpdateResult {
         Self {
             effect: None,
             render: true,
+            canvas: CanvasMetrics::new(
+                tui_kit::layout::CellSize::new(80, 24),
+                tui_kit::layout::CellPixel::FALLBACK,
+            ),
         }
     }
 }
@@ -184,9 +255,22 @@ impl Default for UpdateResult {
 mod tests {
     use super::*;
     use crate::ids::ElementId;
+    use tui_kit::layout::{CellPixel, CellSize};
+    use crate::render::RasterBudget;
     use crate::workspace::ViewInfo;
     use std::collections::{HashMap, HashSet};
     use std::fs;
+
+    fn canvas() -> CanvasMetrics {
+        CanvasMetrics::new(CellSize::new(80, 24), CellPixel::new(8, 16))
+    }
+
+    fn budget() -> RasterBudget {
+        RasterBudget {
+            quality: 1.0,
+            ..RasterBudget::default()
+        }
+    }
 
     fn test_store() -> ViewStore {
         let dir = std::env::temp_dir().join(format!(
@@ -201,7 +285,7 @@ mod tests {
         let child_svg = dir.join("child.svg");
         fs::write(
             &parent_svg,
-            r#"<svg width="100" height="100"><g id="1"><rect x="10" y="10" width="40" height="40"/></g></svg>"#,
+            r#"<svg width="100" height="100"><g id="1"><rect x="10" y="10" width="80" height="80"/></g></svg>"#,
         )
         .unwrap();
         fs::write(&child_svg, r#"<svg width="100" height="100" />"#).unwrap();
@@ -214,21 +298,27 @@ mod tests {
                 ViewInfo {
                     key: "parent".to_owned(),
                     name: "Parent".to_owned(),
-                    view_type: "SystemContext".to_owned(),
+                    kind: crate::workspace::ViewKind::SystemContext,
+                    description: None,
                     svg_path: parent_svg,
                     element_ids: HashSet::from([ElementId::new("1")]),
                     child_view_by_element_id,
+                    primary_view_key: None,
+                    key_view_key: None,
                 },
                 ViewInfo {
                     key: "child".to_owned(),
                     name: "Child".to_owned(),
-                    view_type: "Container".to_owned(),
+                    kind: crate::workspace::ViewKind::Container,
+                    description: None,
                     svg_path: child_svg,
                     element_ids: HashSet::new(),
                     child_view_by_element_id: HashMap::new(),
+                    primary_view_key: None,
+                    key_view_key: None,
                 },
             ],
-            1.0,
+            budget(),
         )
         .unwrap()
     }
@@ -240,15 +330,16 @@ mod tests {
         state
             .apply(
                 Command::DrillAt {
-                    canvas_x: 0.2,
-                    canvas_y: 0.2,
+                    canvas_x: 0.5,
+                    canvas_y: 0.5,
                 },
                 &mut store,
+                canvas(),
             )
             .unwrap();
 
         state
-            .apply(Command::SelectView(ViewId::first()), &mut store)
+            .apply(Command::SelectView(ViewId::first()), &mut store, canvas())
             .unwrap();
 
         assert_eq!(state.current(), ViewId::first());
@@ -263,16 +354,17 @@ mod tests {
         state
             .apply(
                 Command::DrillAt {
-                    canvas_x: 0.2,
-                    canvas_y: 0.2,
+                    canvas_x: 0.5,
+                    canvas_y: 0.5,
                 },
                 &mut store,
+                canvas(),
             )
             .unwrap();
         assert_eq!(state.current(), ViewId::new(1));
         assert_eq!(state.render_frame().breadcrumbs, &[ViewId::first()]);
 
-        state.apply(Command::Back, &mut store).unwrap();
+        state.apply(Command::Back, &mut store, canvas()).unwrap();
         assert_eq!(state.current(), ViewId::first());
         assert!(state.render_frame().breadcrumbs.is_empty());
     }
@@ -286,12 +378,14 @@ mod tests {
             .apply(
                 Command::Zoom {
                     factor: 2.0,
-                    center: (0.5, 0.5),
+                    anchor: ZoomAnchor::Center,
                 },
                 &mut store,
+                canvas(),
             )
             .unwrap();
-        assert_eq!(store.transform(ViewId::first()).scale, 2.0);
+        let scale_after_zoom = store.transform(ViewId::first()).scale;
+        assert!((scale_after_zoom - 2.0).abs() < 0.01);
 
         state
             .apply(
@@ -300,12 +394,32 @@ mod tests {
                     dy_fraction: 0.1,
                 },
                 &mut store,
+                canvas(),
             )
             .unwrap();
-        assert!(store.transform(ViewId::first()).offset_x > 0.0);
+        assert!(store.transform(ViewId::first()).center_x > 0.5);
 
-        state.apply(Command::ResetView, &mut store).unwrap();
-        assert_eq!(store.transform(ViewId::first()), ViewTransform::reset());
+        state
+            .apply(Command::ResetView, &mut store, canvas())
+            .unwrap();
+        assert_eq!(store.transform(ViewId::first()), ViewTransform::fit());
+    }
+
+    #[test]
+    fn zoom_below_one_keeps_image_visible_below_fit() {
+        let mut store = test_store();
+        let mut state = AppState::default();
+        state
+            .apply(
+                Command::Zoom {
+                    factor: 0.5,
+                    anchor: ZoomAnchor::Center,
+                },
+                &mut store,
+                canvas(),
+            )
+            .unwrap();
+        assert!(store.transform(ViewId::first()).scale < 1.0);
     }
 
     #[test]
@@ -315,14 +429,17 @@ mod tests {
         state
             .apply(
                 Command::DrillAt {
-                    canvas_x: 0.2,
-                    canvas_y: 0.2,
+                    canvas_x: 0.5,
+                    canvas_y: 0.5,
                 },
                 &mut store,
+                canvas(),
             )
             .unwrap();
 
-        let result = state.apply(Command::ReloadSucceeded, &mut store).unwrap();
+        let result = state
+            .apply(Command::ReloadSucceeded, &mut store, canvas())
+            .unwrap();
 
         assert_eq!(state.current(), ViewId::first());
         assert!(state.render_frame().breadcrumbs.is_empty());
@@ -336,14 +453,17 @@ mod tests {
         state
             .apply(
                 Command::DrillAt {
-                    canvas_x: 0.2,
-                    canvas_y: 0.2,
+                    canvas_x: 0.5,
+                    canvas_y: 0.5,
                 },
                 &mut store,
+                canvas(),
             )
             .unwrap();
 
-        state.apply(Command::ReloadFailed, &mut store).unwrap();
+        state
+            .apply(Command::ReloadFailed, &mut store, canvas())
+            .unwrap();
 
         assert_eq!(state.current(), ViewId::new(1));
     }
@@ -353,11 +473,13 @@ mod tests {
         let mut store = test_store();
         let mut state = AppState::default();
 
-        let help = state.apply(Command::Help, &mut store).unwrap();
+        let help = state.apply(Command::Help, &mut store, canvas()).unwrap();
         assert_eq!(help.effect, Some(Effect::ShowHelp));
         assert!(!help.render);
 
-        let reload = state.apply(Command::Reload, &mut store).unwrap();
+        let reload = state
+            .apply(Command::Reload, &mut store, canvas())
+            .unwrap();
         assert_eq!(reload.effect, Some(Effect::ReloadWorkspace));
         assert!(!reload.render);
     }
