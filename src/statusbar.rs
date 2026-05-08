@@ -372,7 +372,7 @@ pub mod segments {
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
             let s = ctx.placement.source;
             Some(
-                StatusFragment::new(format!("crop {}×{}@{},{}", s.width, s.height, s.x, s.y))
+                StatusFragment::new(format!("visible {}×{}@{},{}", s.width, s.height, s.x, s.y))
                     .with_priority(100),
             )
         }
@@ -466,7 +466,7 @@ mod tests {
     use super::segments::*;
     use super::*;
     use crate::config::AppConfig;
-    use tui_kit::layout::{CellPixel, CellSize, PixelRect, PixelSize};
+    use tui_kit::layout::{CellPixel, CellSize, PixelSize};
     use crate::render::RenderedView;
 
     fn rendered() -> RenderedView {

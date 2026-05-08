@@ -8,6 +8,7 @@
 use crate::ids::ViewId;
 use crate::render::{render_svg, RasterBudget, RenderedView};
 use crate::view::ViewStore;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use tui_kit::events::AppEventSender;
 use tui_kit::scheduler::{Priority, Scheduler};
@@ -16,7 +17,6 @@ pub use tui_kit::scheduler::Priority as RenderPriority;
 
 #[derive(Debug, Clone)]
 pub struct RenderRequest {
-    pub view_id: ViewId,
     pub svg_path: PathBuf,
     pub budget: RasterBudget,
 }
@@ -27,7 +27,7 @@ pub struct RenderScheduler {
 }
 
 impl RenderScheduler {
-    pub fn new(workers: usize, sink: AppEventSender) -> Self {
+    pub fn new(workers: NonZeroUsize, sink: AppEventSender) -> Self {
         let inner = Scheduler::new(workers, sink, |req: &RenderRequest| {
             render_svg(&req.svg_path, req.budget)
         });
@@ -46,7 +46,6 @@ impl RenderScheduler {
             id,
             priority,
             RenderRequest {
-                view_id,
                 svg_path,
                 budget,
             },

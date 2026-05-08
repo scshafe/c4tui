@@ -1,7 +1,10 @@
 use crate::backend::TerminalBackend;
 use crate::config::AppConfig;
 use crate::event::{Command, InputEvent};
-use tui_kit::events::{AppEvent, AppEventReceiver, AppEventSender};
+use tui_kit::events::{
+    AppEvent, AppEventReceiver, AppEventSender, InputEvent as TuiKitInputEvent, RuntimeEvent,
+    SchedulerEvent, TerminalEvent, WatcherEvent,
+};
 use crate::ids::ViewId;
 use tui_kit::input::Key;
 use crate::keymap::KeyMap;
@@ -12,7 +15,9 @@ use crate::view::ViewStore;
 use crate::workspace::{discover_views, export_workspace, load_workspace_model, WorkspaceSource};
 use anyhow::Result;
 use log::{error, info};
+use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::mpsc::TryRecvError;
 
 #[derive(Debug)]
 enum AppMode {
@@ -49,7 +54,7 @@ impl App {
         sink: AppEventSender,
     ) -> Self {
         let keymap = KeyMap::defaults(&config.keys);
-        let mut scheduler = RenderScheduler::new(1, sink);
+        let mut scheduler = RenderScheduler::new(std::num::NonZeroUsize::new(1).unwrap(), sink);
         scheduler.request_all(
             store.render_jobs(),
             RenderPriority::Background,
@@ -83,8 +88,16 @@ impl App {
         terminal.render(&self.frame_with_progress(), &mut self.store)?;
         self.request_active_render();
 
-        while let Ok(event) = events.recv() {
-            self.handle_event(event, terminal)?;
+        let mut pending_events = VecDeque::new();
+        loop {
+            let event = match pending_events.pop_front() {
+                Some(event) => event,
+                None => match events.recv() {
+                    Ok(event) => event,
+                    Err(_) => break,
+                },
+            };
+            self.handle_event(event, terminal, &events, &mut pending_events)?;
             if self.quit {
                 break;
             }
@@ -96,17 +109,19 @@ impl App {
         &mut self,
         event: AppEvent,
         terminal: &mut impl TerminalBackend,
+        events: &AppEventReceiver,
+        pending_events: &mut VecDeque<AppEvent>,
     ) -> Result<()> {
         match event {
-            AppEvent::Key(key) => self.handle_key(key, terminal),
-            AppEvent::SchedulerComplete => {
+            AppEvent::Input(TuiKitInputEvent::Key(key)) => self.handle_key(key, terminal),
+            AppEvent::Scheduler(SchedulerEvent::Complete) => {
                 let updated = self.scheduler.drain_into(&mut self.store);
                 if !updated.is_empty() {
                     self.redraw_for_mode(terminal)?;
                 }
                 Ok(())
             }
-            AppEvent::WorkspaceChanged => {
+            AppEvent::Watcher(WatcherEvent::WorkspaceChanged) => {
                 terminal.show_message(
                     "Workspace changed",
                     "Re-running Structurizr export.",
@@ -137,15 +152,24 @@ impl App {
                 self.redraw_for_mode(terminal)?;
                 Ok(())
             }
-            AppEvent::Resize { cols, rows } => {
-                log::info!("terminal resized to {cols}×{rows}");
+            AppEvent::Terminal(TerminalEvent::Resize { cols, rows }) => {
+                let (cols, rows, skipped) =
+                    coalesce_resize_events(cols, rows, events, pending_events);
+                if skipped > 0 {
+                    log::info!("terminal resized to {cols}×{rows} after coalescing {skipped} resize events");
+                } else {
+                    log::info!("terminal resized to {cols}×{rows}");
+                }
                 self.redraw_for_mode(terminal)?;
                 Ok(())
             }
-            AppEvent::Heartbeat => {
+            AppEvent::Runtime(RuntimeEvent::Heartbeat) => {
                 self.redraw_for_mode(terminal)?;
                 Ok(())
             }
+            // The categorized AppEvent enum is non-exhaustive; ignore variants
+            // c4tui doesn't currently use (Tick, User).
+            _ => Ok(()),
         }
     }
 
@@ -344,6 +368,33 @@ impl App {
     }
 }
 
+fn coalesce_resize_events(
+    mut cols: u16,
+    mut rows: u16,
+    events: &AppEventReceiver,
+    pending_events: &mut VecDeque<AppEvent>,
+) -> (u16, u16, usize) {
+    let mut skipped = 0;
+    loop {
+        match events.try_recv() {
+            Ok(AppEvent::Terminal(TerminalEvent::Resize {
+                cols: next_cols,
+                rows: next_rows,
+            })) => {
+                cols = next_cols;
+                rows = next_rows;
+                skipped += 1;
+            }
+            Ok(other) => {
+                pending_events.push_back(other);
+                break;
+            }
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+        }
+    }
+    (cols, rows, skipped)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,7 +462,7 @@ mod tests {
     fn run_with_keys(app: &mut App, terminal: &mut FakeTerminalBackend, keys: &[Key]) {
         let (tx, rx) = mpsc::channel();
         for key in keys {
-            tx.send(AppEvent::Key(*key)).unwrap();
+            tx.send(AppEvent::input_key(*key)).unwrap();
         }
         drop(tx);
         let _ = app.run(terminal, rx);
@@ -422,7 +473,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (tx, _rx) = mpsc::channel();
         let mut app = test_app_with_real_svgs(dir.path(), tx);
-        let mut terminal = FakeTerminalBackend::new([]);
+        let mut terminal = FakeTerminalBackend::new();
 
         run_with_keys(
             &mut app,
@@ -439,7 +490,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (tx, _rx) = mpsc::channel();
         let mut app = test_app_with_real_svgs(dir.path(), tx);
-        let mut terminal = FakeTerminalBackend::new([]);
+        let mut terminal = FakeTerminalBackend::new();
 
         run_with_keys(
             &mut app,
@@ -455,7 +506,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (tx, _rx) = mpsc::channel();
         let mut app = test_app_with_real_svgs(dir.path(), tx);
-        let mut terminal = FakeTerminalBackend::new([]);
+        let mut terminal = FakeTerminalBackend::new();
         run_with_keys(
             &mut app,
             &mut terminal,
@@ -469,5 +520,50 @@ mod tests {
         );
         assert!(app.store.transform(ViewId::first()).scale > 1.0);
         assert!(app.store.transform(ViewId::first()).center_x > 0.5);
+    }
+
+    #[test]
+    fn resize_event_redraws_without_key_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let (scheduler_tx, _scheduler_rx) = mpsc::channel();
+        let mut app = test_app_with_real_svgs(dir.path(), scheduler_tx);
+        let mut terminal = FakeTerminalBackend::new();
+        let (event_tx, event_rx) = mpsc::channel();
+
+        event_tx
+            .send(AppEvent::terminal_resize(120, 40))
+            .unwrap();
+        event_tx.send(AppEvent::input_key(Key::CtrlC)).unwrap();
+        drop(event_tx);
+
+        app.run(&mut terminal, event_rx).unwrap();
+
+        assert_eq!(terminal.rendered_frames.len(), 2);
+    }
+
+    #[test]
+    fn resize_burst_coalesces_to_single_redraw() {
+        let dir = tempfile::tempdir().unwrap();
+        let (scheduler_tx, _scheduler_rx) = mpsc::channel();
+        let mut app = test_app_with_real_svgs(dir.path(), scheduler_tx);
+        let mut terminal = FakeTerminalBackend::new();
+        let (event_tx, event_rx) = mpsc::channel();
+
+        event_tx
+            .send(AppEvent::terminal_resize(100, 30))
+            .unwrap();
+        event_tx
+            .send(AppEvent::terminal_resize(120, 40))
+            .unwrap();
+        event_tx
+            .send(AppEvent::terminal_resize(140, 50))
+            .unwrap();
+        event_tx.send(AppEvent::input_key(Key::CtrlC)).unwrap();
+        drop(event_tx);
+
+        app.run(&mut terminal, event_rx).unwrap();
+
+        assert_eq!(terminal.rendered_frames.len(), 2);
+        assert!(app.quit);
     }
 }

@@ -4,14 +4,14 @@ use crate::event::InputEvent;
 use crate::ids::ViewId;
 use tui_kit::input::Key;
 use tui_kit::image::{
-    picker_placement_id, ImageSurface, KittyImageRegistry, PlaceOptions, MAIN_PLACEMENT_ID,
+    picker_placement_id, ImageSurface, ImageSurfaceRegistry, PlaceOptions, MAIN_PLACEMENT_ID,
 };
 use tui_kit::layout::{CanvasMetrics, CellSize};
 use crate::picker::{PickerLine, ViewPicker};
 use crate::state::RenderFrame;
 use crate::statusbar::{default_footer_bar, default_status_bar, StatusBar, StatusContext};
+use crate::view::{diagram_placement, image_id_for_view, ViewStore};
 use tui_kit::tty::terminal_metrics;
-use crate::view::{image_id_for_view, ViewStore};
 use anyhow::Result;
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
@@ -27,7 +27,7 @@ type Term = ratatui::Terminal<CrosstermBackend<Stdout>>;
 
 pub struct TerminalSession {
     terminal: Option<Term>,
-    images: KittyImageRegistry,
+    images: ImageSurfaceRegistry,
     status_bar: StatusBar,
     footer_bar: StatusBar,
     workspace_path: Option<std::path::PathBuf>,
@@ -48,7 +48,7 @@ impl TerminalSession {
         let terminal = ratatui::Terminal::new(backend)?;
         Ok(Self {
             terminal: Some(terminal),
-            images: KittyImageRegistry::default(),
+            images: ImageSurfaceRegistry::strict_kitty(),
             status_bar: default_status_bar(),
             footer_bar: default_footer_bar(),
             workspace_path: None,
@@ -81,10 +81,6 @@ impl TerminalSession {
         CanvasMetrics::new(cells, metrics.cell_pixel.or_fallback())
     }
 
-    fn full_terminal_metrics(&self) -> CanvasMetrics {
-        terminal_metrics()
-    }
-
     fn render_view(
         &mut self,
         view_id: ViewId,
@@ -96,7 +92,7 @@ impl TerminalSession {
         let canvas = self.canvas();
         let raster = store.rendered_view(view_id)?.raster_size;
         let transform = store.transform(view_id);
-        let placement = transform.place(raster, canvas);
+        let placement = diagram_placement(transform, raster, canvas);
         let image_id = image_id_for_view(view_id);
 
         {
@@ -185,7 +181,6 @@ impl TerminalSession {
                 rendered: &rendered,
                 item_row_span: ITEM_ROW_SPAN,
                 thumb_cols: THUMB_COLS,
-                thumb_rows: THUMB_ROWS,
                 thumbnails: &mut thumbs,
             };
             widget.render(frame.area(), frame.buffer_mut());
@@ -388,7 +383,6 @@ struct PickerWidget<'a> {
     rendered: &'a crate::picker::RenderedPicker,
     item_row_span: u16,
     thumb_cols: u16,
-    thumb_rows: u16,
     thumbnails: &'a mut Vec<(ViewId, u16, u16)>,
 }
 

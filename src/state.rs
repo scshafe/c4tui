@@ -28,10 +28,6 @@ impl AppState {
         self.current
     }
 
-    pub fn pinned_element(&self) -> Option<&ElementId> {
-        self.pinned_element.as_ref()
-    }
-
     pub fn render_frame(&self) -> RenderFrame {
         RenderFrame {
             current: self.current,
