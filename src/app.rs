@@ -10,6 +10,7 @@ use tui_kit::input::Key;
 use crate::keymap::KeyMap;
 use crate::picker::{PickerOutcome, ViewPicker};
 use tui_kit::component::{Cached, Component, ComponentOutcome};
+use tui_kit::focus::{FocusConfig, FocusId, FocusManager, FocusNode, FocusScopeKind};
 use crate::render_pool::{RenderPriority, RenderScheduler};
 use crate::state::{AppState, Effect};
 use crate::view::ViewStore;
@@ -20,16 +21,22 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::mpsc::TryRecvError;
 
+// Modal scope identifiers. c4tui's modes (picker, dialog) push focus scopes
+// with these IDs; routing reads `focus.active_scope_id()` to decide which
+// path handles input or a redraw.
+const SCOPE_ROOT: &str = "root";
+const SCOPE_PICKER: &str = "picker";
+const SCOPE_DIALOG: &str = "dialog";
+
 #[derive(Debug)]
-enum AppMode {
-    Normal,
-    Picker {
-        picker: Cached<ViewPicker>,
-        last_hover: ViewId,
-    },
-    Dialog {
-        dismissable: bool,
-    },
+struct PickerSlot {
+    picker: Cached<ViewPicker>,
+    last_hover: ViewId,
+}
+
+#[derive(Debug)]
+struct DialogSlot {
+    dismissable: bool,
 }
 
 pub struct App {
@@ -42,7 +49,18 @@ pub struct App {
     keymap: KeyMap,
     scheduler: RenderScheduler,
     quit: bool,
-    mode: AppMode,
+    focus: FocusManager,
+    picker_slot: Option<PickerSlot>,
+    dialog_slot: Option<DialogSlot>,
+}
+
+impl std::fmt::Debug for App {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("App")
+            .field("active_scope", &self.focus.active_scope_id())
+            .field("quit", &self.quit)
+            .finish_non_exhaustive()
+    }
 }
 
 impl App {
@@ -61,6 +79,15 @@ impl App {
             RenderPriority::Background,
             store.budget(),
         );
+        let focus = FocusManager::new(
+            FocusConfig {
+                wrap: false,
+                restore_on_scope_pop: true,
+                require_initial_focus: false,
+            },
+            vec![FocusNode::new("canvas")],
+        )
+        .expect("root focus scope is well-formed");
         Self {
             store,
             state: AppState::default(),
@@ -71,8 +98,39 @@ impl App {
             keymap,
             scheduler,
             quit: false,
-            mode: AppMode::Normal,
+            focus,
+            picker_slot: None,
+            dialog_slot: None,
         }
+    }
+
+    fn active_scope(&self) -> &str {
+        self.focus
+            .active_scope_id()
+            .map(FocusId::as_str)
+            .unwrap_or(SCOPE_ROOT)
+    }
+
+    /// Pop any active modal scope and clear its slot data. No-op at root.
+    fn return_to_root(&mut self) {
+        while self.focus.active_scope_id().map(FocusId::as_str) != Some(SCOPE_ROOT) {
+            self.focus.pop_scope();
+        }
+        self.picker_slot = None;
+        self.dialog_slot = None;
+    }
+
+    /// Enter a dismissable dialog scope, replacing any current modal.
+    fn enter_dialog(&mut self, dismissable: bool) {
+        self.return_to_root();
+        self.focus
+            .push_scope(
+                SCOPE_DIALOG,
+                FocusScopeKind::Modal,
+                vec![FocusNode::new("dialog-ok")],
+            )
+            .expect("dialog scope is well-formed");
+        self.dialog_slot = Some(DialogSlot { dismissable });
     }
 
     #[allow(dead_code)]
@@ -145,11 +203,11 @@ impl App {
                         self.state
                             .apply(Command::ReloadFailed, &mut self.store, canvas)?;
                         terminal.show_error("Auto-reload failed", &format!("{error:#}"))?;
-                        self.mode = AppMode::Dialog { dismissable: true };
+                        self.enter_dialog(true);
                         return Ok(());
                     }
                 }
-                self.mode = AppMode::Normal;
+                self.return_to_root();
                 self.redraw_for_mode(terminal)?;
                 Ok(())
             }
@@ -171,19 +229,25 @@ impl App {
     }
 
     fn handle_key(&mut self, key: Key, terminal: &mut impl TerminalBackend) -> Result<()> {
-        match &mut self.mode {
-            AppMode::Normal => {
-                let input = terminal.translate_key(key);
-                self.handle_input(input, terminal)
-            }
-            AppMode::Dialog { dismissable } => {
-                if *dismissable {
-                    self.mode = AppMode::Normal;
+        match self.active_scope() {
+            SCOPE_PICKER => self.handle_key_picker(key, terminal),
+            SCOPE_DIALOG => {
+                if self
+                    .dialog_slot
+                    .as_ref()
+                    .map(|d| d.dismissable)
+                    .unwrap_or(false)
+                {
+                    self.dialog_slot = None;
+                    self.focus.pop_scope();
                     self.redraw_for_mode(terminal)?;
                 }
                 Ok(())
             }
-            AppMode::Picker { .. } => self.handle_key_picker(key, terminal),
+            _ => {
+                let input = terminal.translate_key(key);
+                self.handle_input(input, terminal)
+            }
         }
     }
 
@@ -193,15 +257,15 @@ impl App {
         terminal: &mut impl TerminalBackend,
     ) -> Result<()> {
         let outcome = {
-            let AppMode::Picker { picker, last_hover } = &mut self.mode else {
+            let Some(slot) = self.picker_slot.as_mut() else {
                 return Ok(());
             };
-            let outcome = match picker.handle_event(&key)? {
+            let outcome = match slot.picker.handle_event(&key)? {
                 ComponentOutcome::Message(m) => m,
                 _ => PickerOutcome::Continue,
             };
-            let now = picker.inner().selected_view_id();
-            if now != *last_hover {
+            let now = slot.picker.inner().selected_view_id();
+            if now != slot.last_hover {
                 if !self.store.has_rendered(now) {
                     let path = self.store.view(now).svg_path.clone();
                     self.scheduler.request(
@@ -211,20 +275,21 @@ impl App {
                         self.store.budget(),
                     );
                 }
-                *last_hover = now;
+                slot.last_hover = now;
             }
             outcome
         };
         match outcome {
             PickerOutcome::Continue => {
-                if let AppMode::Picker { picker, .. } = &mut self.mode {
-                    terminal.draw_picker(picker, &self.store)?;
+                if let Some(slot) = self.picker_slot.as_mut() {
+                    terminal.draw_picker(&mut slot.picker, &self.store)?;
                 }
                 Ok(())
             }
             PickerOutcome::Select(view_id) => {
                 terminal.close_picker(&self.store)?;
-                self.mode = AppMode::Normal;
+                self.picker_slot = None;
+                self.focus.pop_scope();
                 let canvas = terminal.canvas_metrics();
                 self.state
                     .apply(Command::SelectView(view_id), &mut self.store, canvas)?;
@@ -234,7 +299,8 @@ impl App {
             }
             PickerOutcome::Cancel => {
                 terminal.close_picker(&self.store)?;
-                self.mode = AppMode::Normal;
+                self.picker_slot = None;
+                self.focus.pop_scope();
                 terminal.render(&self.frame_with_progress(), &mut self.store)?;
                 Ok(())
             }
@@ -243,10 +309,15 @@ impl App {
 
     fn redraw_for_mode(&mut self, terminal: &mut impl TerminalBackend) -> Result<()> {
         let frame = self.frame_with_progress();
-        match &mut self.mode {
-            AppMode::Normal => terminal.render(&frame, &mut self.store),
-            AppMode::Picker { picker, .. } => terminal.draw_picker(picker, &self.store),
-            AppMode::Dialog { .. } => Ok(()),
+        match self.active_scope() {
+            SCOPE_PICKER => {
+                if let Some(slot) = self.picker_slot.as_mut() {
+                    terminal.draw_picker(&mut slot.picker, &self.store)?;
+                }
+                Ok(())
+            }
+            SCOPE_DIALOG => Ok(()),
+            _ => terminal.render(&frame, &mut self.store),
         }
     }
 
@@ -281,12 +352,19 @@ impl App {
                         self.store.budget(),
                     );
                 }
-                self.mode = AppMode::Picker {
+                self.focus
+                    .push_scope(
+                        SCOPE_PICKER,
+                        FocusScopeKind::Modal,
+                        vec![FocusNode::new("picker-list")],
+                    )
+                    .expect("picker scope is well-formed");
+                self.picker_slot = Some(PickerSlot {
                     picker: Cached::new(picker_inner),
                     last_hover,
-                };
-                if let AppMode::Picker { picker, .. } = &mut self.mode {
-                    terminal.draw_picker(picker, &self.store)?;
+                });
+                if let Some(slot) = self.picker_slot.as_mut() {
+                    terminal.draw_picker(&mut slot.picker, &self.store)?;
                 }
             }
             Some(Effect::ReloadWorkspace) => {
@@ -310,7 +388,7 @@ impl App {
                         self.state
                             .apply(Command::ReloadFailed, &mut self.store, canvas)?;
                         terminal.show_error("Reload failed", &format!("{error:#}"))?;
-                        self.mode = AppMode::Dialog { dismissable: true };
+                        self.enter_dialog(true);
                         return Ok(());
                     }
                 }
@@ -322,7 +400,7 @@ impl App {
             }
             Some(Effect::ShowHelp) => {
                 terminal.show_help(&self.config.keys)?;
-                self.mode = AppMode::Dialog { dismissable: true };
+                self.enter_dialog(true);
             }
             None if update.render => {
                 terminal.render(&self.frame_with_progress(), &mut self.store)?;
