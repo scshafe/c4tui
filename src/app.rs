@@ -2,8 +2,8 @@ use crate::backend::TerminalBackend;
 use crate::config::AppConfig;
 use crate::event::{Command, InputEvent};
 use tui_kit::events::{
-    AppEvent, AppEventReceiver, AppEventSender, InputEvent as TuiKitInputEvent, RuntimeEvent,
-    SchedulerEvent, TerminalEvent, WatcherEvent,
+    AppEvent, AppEventReceiver, AppEventSender, InputEvent as TuiKitInputEvent, SchedulerEvent,
+    TerminalEvent, WatcherEvent,
 };
 use crate::ids::ViewId;
 use tui_kit::input::Key;
@@ -163,12 +163,8 @@ impl App {
                 self.redraw_for_mode(terminal)?;
                 Ok(())
             }
-            AppEvent::Runtime(RuntimeEvent::Heartbeat) => {
-                self.redraw_for_mode(terminal)?;
-                Ok(())
-            }
-            // The categorized AppEvent enum is non-exhaustive; ignore variants
-            // c4tui doesn't currently use (Tick, User).
+            // The categorized AppEvent enum is non-exhaustive; ignore the
+            // User variant since c4tui doesn't define a domain command type yet.
             _ => Ok(()),
         }
     }
