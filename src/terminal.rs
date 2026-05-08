@@ -4,7 +4,7 @@ use crate::event::InputEvent;
 use crate::ids::ViewId;
 use tui_kit::input::Key;
 use tui_kit::image::{
-    picker_placement_id, ImageSurface, ImageSurfaceRegistry, PlaceOptions, MAIN_PLACEMENT_ID,
+    picker_placement_id, ImageSurface, PlaceOptions, MAIN_PLACEMENT_ID,
 };
 use tui_kit::layout::{CanvasMetrics, CellSize};
 use crate::picker::ViewPicker;
@@ -14,20 +14,16 @@ use crate::statusbar::{default_footer_bar, default_status_bar, StatusBar, Status
 use crate::view::{diagram_placement, image_id_for_view, ViewStore};
 use tui_kit::tty::terminal_metrics;
 use anyhow::Result;
-use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::{Clear, Paragraph, Widget};
 use tui_kit::widgets::dialog::Dialog;
-use std::io::{self, Stdout, Write};
+use std::io::{self, Write};
 
 const STATUS_ROWS: u16 = 1;
 const FOOTER_ROWS: u16 = 1;
 
-type Term = ratatui::Terminal<CrosstermBackend<Stdout>>;
-
 pub struct TerminalSession {
-    terminal: Option<Term>,
-    images: ImageSurfaceRegistry,
+    inner: tui_kit::terminal::Terminal,
     status_bar: StatusBar,
     footer_bar: StatusBar,
     workspace_path: Option<std::path::PathBuf>,
@@ -36,19 +32,9 @@ pub struct TerminalSession {
 
 impl TerminalSession {
     pub fn enter(config: AppConfig) -> Result<Self> {
-        crossterm::terminal::enable_raw_mode()?;
-        let mut stdout = io::stdout();
-        crossterm::execute!(
-            stdout,
-            crossterm::terminal::EnterAlternateScreen,
-            crossterm::cursor::Hide,
-            crossterm::event::EnableMouseCapture,
-        )?;
-        let backend = CrosstermBackend::new(io::stdout());
-        let terminal = ratatui::Terminal::new(backend)?;
+        let inner = tui_kit::terminal::Terminal::enter()?;
         Ok(Self {
-            terminal: Some(terminal),
-            images: ImageSurfaceRegistry::strict_kitty(),
+            inner,
             status_bar: default_status_bar(),
             footer_bar: default_footer_bar(),
             workspace_path: None,
@@ -97,7 +83,7 @@ impl TerminalSession {
 
         {
             let png = &store.rendered_view(view_id)?.png;
-            self.images.ensure_loaded(image_id, png)?;
+            self.inner.images().ensure_loaded(image_id, png)?;
         }
 
         let view = store.view(view_id).clone();
@@ -126,11 +112,7 @@ impl TerminalSession {
         let footer_text = self.footer_bar.render(&context, canvas.cells.cols);
 
         let mut canvas_rect = Rect::default();
-        let terminal = self
-            .terminal
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("terminal session not initialised"))?;
-        terminal.draw(|frame| {
+        self.inner.draw(|frame| {
             let chunks = Layout::vertical([
                 Constraint::Length(1),
                 Constraint::Min(0),
@@ -146,21 +128,22 @@ impl TerminalSession {
         let cursor_row = canvas_rect.y + placement.origin.row + 1;
         let cursor_col = canvas_rect.x + placement.origin.col + 1;
         position_cursor(cursor_row, cursor_col)?;
-        self.images.place(PlaceOptions {
+        self.inner.images().place(PlaceOptions {
             image_id,
             placement_id: MAIN_PLACEMENT_ID,
             source: placement.source,
             cell_cols: placement.size.cols,
             cell_rows: placement.size.rows,
         })?;
-        self.images.flush()?;
+        self.inner.images().flush()?;
         Ok(())
     }
 
     pub fn close_picker(&mut self, store: &ViewStore) -> Result<()> {
-        self.images
+        self.inner
+            .images()
             .delete_placements_in((0..store.views.len()).map(picker_placement_id))?;
-        self.images.flush()?;
+        self.inner.images().flush()?;
         Ok(())
     }
 
@@ -172,13 +155,9 @@ impl TerminalSession {
         const THUMB_COLS: u16 = 12;
         const THUMB_ROWS: u16 = 3;
 
-        self.images.delete_placement(MAIN_PLACEMENT_ID)?;
-        let terminal = self
-            .terminal
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("terminal session not initialised"))?;
+        self.inner.images().delete_placement(MAIN_PLACEMENT_ID)?;
         let mut render_result: Result<()> = Ok(());
-        terminal.draw(|frame| {
+        self.inner.draw(|frame| {
             let area = frame.area();
             render_result = picker.render_to_buffer(area, frame.buffer_mut());
         })?;
@@ -189,12 +168,12 @@ impl TerminalSession {
             .map(picker_placement_id)
             .filter(|id| !thumbs.iter().any(|(vid, _, _)| picker_placement_id(vid.index()) == *id))
             .collect();
-        self.images.delete_placements_in(placements_to_clear)?;
+        self.inner.images().delete_placements_in(placements_to_clear)?;
 
         for (view_id, row, col) in &thumbs {
             self.draw_thumbnail(*view_id, *row, *col, THUMB_COLS, THUMB_ROWS, store)?;
         }
-        self.images.flush()?;
+        self.inner.images().flush()?;
         Ok(())
     }
 
@@ -211,9 +190,9 @@ impl TerminalSession {
         let Some(rendered) = store.cached_rendered_view(view_id) else {
             return Ok(false);
         };
-        self.images.ensure_loaded(image_id, &rendered.png)?;
+        self.inner.images().ensure_loaded(image_id, &rendered.png)?;
         position_cursor(row, col)?;
-        self.images.place(PlaceOptions {
+        self.inner.images().place(PlaceOptions {
             image_id,
             placement_id: picker_placement_id(view_id.index()),
             source: tui_kit::layout::PixelRect {
@@ -229,8 +208,8 @@ impl TerminalSession {
     }
 
     fn clear_image_cache_inner(&mut self) -> Result<()> {
-        self.images.forget_all()?;
-        self.images.flush()?;
+        self.inner.images().forget_all()?;
+        self.inner.images().flush()?;
         Ok(())
     }
 
@@ -262,16 +241,12 @@ impl TerminalSession {
 
     pub fn show_dialog(&mut self, title: &str, message: &str, footer: &str) -> Result<()> {
         let dialog = Dialog::new(title, message).with_footer(footer);
-        self.images.delete_placement(MAIN_PLACEMENT_ID)?;
-        let terminal = self
-            .terminal
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("terminal session not initialised"))?;
-        terminal.draw(|frame| {
+        self.inner.images().delete_placement(MAIN_PLACEMENT_ID)?;
+        self.inner.draw(|frame| {
             let area = frame.area();
             dialog.render(area, frame.buffer_mut());
         })?;
-        self.images.flush()?;
+        self.inner.images().flush()?;
         Ok(())
     }
 
@@ -352,20 +327,8 @@ impl TerminalBackend for TerminalSession {
     }
 }
 
-impl Drop for TerminalSession {
-    fn drop(&mut self) {
-        self.terminal.take();
-        self.images.shutdown();
-        let _ = io::stdout().flush();
-        let _ = crossterm::execute!(
-            io::stdout(),
-            crossterm::event::DisableMouseCapture,
-            crossterm::cursor::Show,
-            crossterm::terminal::LeaveAlternateScreen,
-        );
-        let _ = crossterm::terminal::disable_raw_mode();
-    }
-}
+// Drop handled by tui_kit::terminal::Terminal: leaves alt-screen, disables
+// mouse capture, restores cursor, exits raw mode, shuts down image registry.
 
 fn position_cursor(row: u16, col: u16) -> Result<()> {
     write!(io::stdout().lock(), "\x1b[{};{}H", row.max(1), col.max(1))?;

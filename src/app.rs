@@ -7,7 +7,7 @@ use tui_kit::events::{
 };
 use crate::ids::ViewId;
 use tui_kit::input::Key;
-use crate::keymap::KeyMap;
+use crate::keymap::{KeyMap, KeyMapExt};
 use crate::picker::{PickerOutcome, ViewPicker};
 use tui_kit::component::{Cached, Component, ComponentOutcome};
 use tui_kit::focus::{FocusConfig, FocusId, FocusManager, FocusNode, FocusScopeKind};
@@ -72,7 +72,7 @@ impl App {
         config: AppConfig,
         sink: AppEventSender,
     ) -> Self {
-        let keymap = KeyMap::defaults(&config.keys);
+        let keymap = <KeyMap as KeyMapExt>::defaults(&config.keys);
         let mut scheduler = RenderScheduler::new(std::num::NonZeroUsize::new(1).unwrap(), sink);
         scheduler.request_all(
             store.render_jobs(),
