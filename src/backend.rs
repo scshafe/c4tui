@@ -1,5 +1,6 @@
 use crate::config::KeyBindings;
 use crate::event::InputEvent;
+use tui_kit::component::Cached;
 use tui_kit::input::Key;
 use tui_kit::layout::CanvasMetrics;
 use crate::picker::ViewPicker;
@@ -11,7 +12,11 @@ pub trait TerminalBackend {
     fn canvas_metrics(&self) -> CanvasMetrics;
     fn translate_key(&self, key: Key) -> InputEvent;
     fn render(&mut self, frame: &RenderFrame, store: &mut ViewStore) -> Result<()>;
-    fn draw_picker(&mut self, picker: &ViewPicker, store: &ViewStore) -> Result<()>;
+    fn draw_picker(
+        &mut self,
+        picker: &mut Cached<ViewPicker>,
+        store: &ViewStore,
+    ) -> Result<()>;
     fn close_picker(&mut self, store: &ViewStore) -> Result<()>;
     fn clear_image_cache(&mut self) -> Result<()>;
     fn show_message(&mut self, title: &str, message: &str) -> Result<()>;
@@ -63,7 +68,11 @@ pub mod fake {
             Ok(())
         }
 
-        fn draw_picker(&mut self, _picker: &ViewPicker, _store: &ViewStore) -> Result<()> {
+        fn draw_picker(
+            &mut self,
+            _picker: &mut Cached<ViewPicker>,
+            _store: &ViewStore,
+        ) -> Result<()> {
             self.picker_draws += 1;
             Ok(())
         }

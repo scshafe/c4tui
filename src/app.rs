@@ -9,6 +9,7 @@ use crate::ids::ViewId;
 use tui_kit::input::Key;
 use crate::keymap::KeyMap;
 use crate::picker::{PickerOutcome, ViewPicker};
+use tui_kit::component::{Cached, Component, ComponentOutcome};
 use crate::render_pool::{RenderPriority, RenderScheduler};
 use crate::state::{AppState, Effect};
 use crate::view::ViewStore;
@@ -23,7 +24,7 @@ use std::sync::mpsc::TryRecvError;
 enum AppMode {
     Normal,
     Picker {
-        picker: ViewPicker,
+        picker: Cached<ViewPicker>,
         last_hover: ViewId,
     },
     Dialog {
@@ -195,8 +196,11 @@ impl App {
             let AppMode::Picker { picker, last_hover } = &mut self.mode else {
                 return Ok(());
             };
-            let outcome = picker.handle_key(key);
-            let now = picker.selected_view_id();
+            let outcome = match picker.handle_event(&key)? {
+                ComponentOutcome::Message(m) => m,
+                _ => PickerOutcome::Continue,
+            };
+            let now = picker.inner().selected_view_id();
             if now != *last_hover {
                 if !self.store.has_rendered(now) {
                     let path = self.store.view(now).svg_path.clone();
@@ -213,7 +217,7 @@ impl App {
         };
         match outcome {
             PickerOutcome::Continue => {
-                if let AppMode::Picker { picker, .. } = &self.mode {
+                if let AppMode::Picker { picker, .. } = &mut self.mode {
                     terminal.draw_picker(picker, &self.store)?;
                 }
                 Ok(())
@@ -238,8 +242,9 @@ impl App {
     }
 
     fn redraw_for_mode(&mut self, terminal: &mut impl TerminalBackend) -> Result<()> {
-        match &self.mode {
-            AppMode::Normal => terminal.render(&self.frame_with_progress(), &mut self.store),
+        let frame = self.frame_with_progress();
+        match &mut self.mode {
+            AppMode::Normal => terminal.render(&frame, &mut self.store),
             AppMode::Picker { picker, .. } => terminal.draw_picker(picker, &self.store),
             AppMode::Dialog { .. } => Ok(()),
         }
@@ -261,12 +266,12 @@ impl App {
                 self.quit = true;
             }
             Some(Effect::OpenPicker) => {
-                let picker = ViewPicker::new(
+                let picker_inner = ViewPicker::new(
                     &self.store.views,
                     &self.store.model,
                     self.state.current(),
                 );
-                let last_hover = picker.selected_view_id();
+                let last_hover = picker_inner.selected_view_id();
                 if !self.store.has_rendered(last_hover) {
                     let path = self.store.view(last_hover).svg_path.clone();
                     self.scheduler.request(
@@ -276,8 +281,11 @@ impl App {
                         self.store.budget(),
                     );
                 }
-                self.mode = AppMode::Picker { picker, last_hover };
-                if let AppMode::Picker { picker, .. } = &self.mode {
+                self.mode = AppMode::Picker {
+                    picker: Cached::new(picker_inner),
+                    last_hover,
+                };
+                if let AppMode::Picker { picker, .. } = &mut self.mode {
                     terminal.draw_picker(picker, &self.store)?;
                 }
             }

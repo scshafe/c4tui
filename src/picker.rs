@@ -1,8 +1,16 @@
 #![allow(dead_code)]
 
 use crate::ids::ViewId;
-use tui_kit::input::Key;
 use crate::workspace::{ViewInfo, ViewKind, WorkspaceModel};
+use anyhow::Result;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
+use ratatui::widgets::{Block, Borders, Paragraph, Widget};
+use tui_kit::component::{
+    BufferComponent, ComponentId, ComponentOutcome, DirtyReason, DirtyState,
+};
+use tui_kit::input::Key;
 
 #[derive(Debug, Clone)]
 pub struct PickerItem {
@@ -17,10 +25,13 @@ pub struct PickerItem {
 
 #[derive(Debug)]
 pub struct ViewPicker {
+    id: ComponentId,
     items: Vec<PickerItem>,
     filter: String,
     show_keys: bool,
     selected_view: ViewId,
+    dirty: DirtyState,
+    last_thumbnails: Vec<(ViewId, u16, u16)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -51,6 +62,9 @@ pub enum PickerLine {
     Empty(String),
 }
 
+const ITEM_ROW_SPAN: u16 = 3;
+const THUMB_COLS: u16 = 12;
+
 impl ViewPicker {
     pub fn new(views: &[ViewInfo], model: &WorkspaceModel, current: ViewId) -> Self {
         let items = views
@@ -74,10 +88,13 @@ impl ViewPicker {
             })
             .collect();
         Self {
+            id: ComponentId::new("c4tui-picker"),
             items,
             filter: String::new(),
             show_keys: false,
             selected_view: current,
+            dirty: DirtyState::paint(DirtyReason::Explicit),
+            last_thumbnails: Vec::new(),
         }
     }
 
@@ -88,6 +105,8 @@ impl ViewPicker {
                     PickerOutcome::Cancel
                 } else {
                     self.filter.clear();
+                    self.dirty.mark_paint(DirtyReason::Input);
+                    self.dirty.mark_image_placement(DirtyReason::Input);
                     PickerOutcome::Continue
                 }
             }
@@ -105,31 +124,41 @@ impl ViewPicker {
             }
             Key::Up => {
                 self.move_selection(-1);
+                self.dirty.mark_paint(DirtyReason::Input);
                 PickerOutcome::Continue
             }
             Key::Down => {
                 self.move_selection(1);
+                self.dirty.mark_paint(DirtyReason::Input);
                 PickerOutcome::Continue
             }
             Key::Tab => {
                 self.show_keys = !self.show_keys;
                 self.clamp_selection();
+                self.dirty.mark_paint(DirtyReason::Input);
+                self.dirty.mark_image_placement(DirtyReason::Input);
                 PickerOutcome::Continue
             }
             Key::Back => {
                 self.filter.pop();
                 self.clamp_selection();
+                self.dirty.mark_paint(DirtyReason::Input);
+                self.dirty.mark_image_placement(DirtyReason::Input);
                 PickerOutcome::Continue
             }
             Key::Char(c) => {
                 self.filter.push(c);
                 self.clamp_selection();
+                self.dirty.mark_paint(DirtyReason::Input);
+                self.dirty.mark_image_placement(DirtyReason::Input);
                 PickerOutcome::Continue
             }
             _ => PickerOutcome::Continue,
         }
     }
 
+    /// Build the layout-level rendering of the picker. Kept public for tests
+    /// and introspection; production rendering goes through [`render_buffer`].
     pub fn render(&self) -> RenderedPicker {
         let visible = self.visible_items();
         let groups = group_items_by_kind(&visible);
@@ -199,6 +228,13 @@ impl ViewPicker {
         self.selected_view
     }
 
+    /// Last-render thumbnail placements: `(view_id, screen_row, screen_col)`.
+    /// Re-populated on every [`render_buffer`] call; the slice is a snapshot
+    /// of the most recent render and remains valid until the next one.
+    pub fn thumbnails(&self) -> &[(ViewId, u16, u16)] {
+        &self.last_thumbnails
+    }
+
     fn move_selection(&mut self, delta: i32) {
         let visible = self.visible_view_ids();
         if visible.is_empty() {
@@ -209,8 +245,7 @@ impl ViewPicker {
             .position(|id| *id == self.selected_view)
             .map(|i| i as i32)
             .unwrap_or(0);
-        let next = (current_idx + delta)
-            .rem_euclid(visible.len() as i32) as usize;
+        let next = (current_idx + delta).rem_euclid(visible.len() as i32) as usize;
         self.selected_view = visible[next];
     }
 
@@ -245,6 +280,173 @@ impl ViewPicker {
             .into_iter()
             .map(|item| item.view_id)
             .collect()
+    }
+}
+
+impl BufferComponent for ViewPicker {
+    type Event = Key;
+    type Message = PickerOutcome;
+
+    fn id(&self) -> &ComponentId {
+        &self.id
+    }
+
+    fn render_buffer(&mut self, area: Rect, buffer: &mut Buffer) -> Result<()> {
+        let rendered = self.render();
+        self.last_thumbnails.clear();
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" View Picker ")
+            .title_bottom(" type → filter | Tab → legends | Enter → select | Esc → cancel ");
+        let inner = block.inner(area);
+        block.render(area, buffer);
+        if inner.height < 3 || inner.width < 8 {
+            return Ok(());
+        }
+
+        let header_avail = inner.width.saturating_sub(1) as usize;
+        Paragraph::new(truncate(&rendered.header, header_avail)).render(
+            Rect {
+                x: inner.x,
+                y: inner.y,
+                width: inner.width,
+                height: 1,
+            },
+            buffer,
+        );
+
+        let body = Rect {
+            x: inner.x,
+            y: inner.y + 2,
+            width: inner.width,
+            height: inner.height.saturating_sub(2),
+        };
+
+        let layouts = compute_line_spans(&rendered.lines, ITEM_ROW_SPAN);
+        let total_virtual = layouts.last().map(|l| l.virtual_row + l.span).unwrap_or(0);
+        let mut scroll: u16 = 0;
+        if let Some(sel) = layouts.iter().find(|l| l.selected_item) {
+            let sel_end = sel.virtual_row + sel.span;
+            if total_virtual > body.height {
+                if sel_end > scroll + body.height {
+                    scroll = sel_end - body.height;
+                }
+                if sel.virtual_row < scroll {
+                    scroll = sel.virtual_row;
+                }
+            }
+        }
+
+        for layout in &layouts {
+            if layout.virtual_row + layout.span <= scroll {
+                continue;
+            }
+            if layout.virtual_row >= scroll + body.height {
+                break;
+            }
+            let screen_row = body.y + layout.virtual_row.saturating_sub(scroll);
+            if screen_row >= body.y + body.height {
+                break;
+            }
+            match &rendered.lines[layout.index] {
+                PickerLine::Header(text) => {
+                    let avail = body.width.saturating_sub(1) as usize;
+                    buffer.set_string(
+                        body.x,
+                        screen_row,
+                        truncate(text, avail),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    );
+                }
+                PickerLine::Item {
+                    view_id,
+                    marker,
+                    primary,
+                    detail,
+                    selected,
+                } => {
+                    self.last_thumbnails
+                        .push((*view_id, screen_row + 1, body.x + 1 + 1));
+                    let text_col = body.x + THUMB_COLS + 2;
+                    let text_avail = body.width.saturating_sub(THUMB_COLS + 2 + 1) as usize;
+                    let text =
+                        format!("{} {}", marker, truncate(primary, text_avail.saturating_sub(2)));
+                    let style = if *selected {
+                        Style::default().add_modifier(Modifier::REVERSED)
+                    } else {
+                        Style::default()
+                    };
+                    let visible_len = text.chars().count();
+                    buffer.set_string(text_col, screen_row, &text, style);
+                    if *selected {
+                        let pad = text_avail.saturating_sub(visible_len);
+                        if pad > 0 {
+                            buffer.set_string(
+                                text_col + visible_len as u16,
+                                screen_row,
+                                " ".repeat(pad),
+                                style,
+                            );
+                        }
+                    }
+                    if let Some(d) = detail {
+                        let detail_row = screen_row + 1;
+                        if detail_row < body.y + body.height {
+                            let avail =
+                                body.width.saturating_sub(THUMB_COLS + 4 + 1) as usize;
+                            buffer.set_string(
+                                text_col + 2,
+                                detail_row,
+                                truncate(d, avail),
+                                Style::default().add_modifier(Modifier::DIM),
+                            );
+                        }
+                    }
+                }
+                PickerLine::Empty(text) => {
+                    buffer.set_string(body.x, screen_row, text, Style::default());
+                }
+            }
+        }
+
+        if scroll > 0 {
+            buffer.set_string(
+                inner.x + inner.width.saturating_sub(1),
+                body.y,
+                "▲",
+                Style::default(),
+            );
+        }
+        if scroll + body.height < total_virtual {
+            buffer.set_string(
+                inner.x + inner.width.saturating_sub(1),
+                body.y + body.height.saturating_sub(1),
+                "▼",
+                Style::default(),
+            );
+        }
+        Ok(())
+    }
+
+    fn handle_event(&mut self, event: &Key) -> Result<ComponentOutcome<PickerOutcome>> {
+        let outcome = self.handle_key(*event);
+        Ok(match outcome {
+            PickerOutcome::Continue => ComponentOutcome::Handled,
+            other => ComponentOutcome::Message(other),
+        })
+    }
+
+    fn dirty(&self) -> &DirtyState {
+        &self.dirty
+    }
+
+    fn mark_dirty(&mut self, reason: DirtyReason) {
+        self.dirty.mark_paint(reason);
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty.clear();
     }
 }
 
@@ -332,6 +534,42 @@ fn kind_heading(kind: ViewKind) -> String {
         ViewKind::Unknown => "Other",
     };
     format!("── {label} ──")
+}
+
+#[derive(Debug)]
+struct LineSpan {
+    index: usize,
+    virtual_row: u16,
+    span: u16,
+    selected_item: bool,
+}
+
+fn compute_line_spans(lines: &[PickerLine], item_span: u16) -> Vec<LineSpan> {
+    let mut layouts = Vec::with_capacity(lines.len());
+    let mut row = 0u16;
+    for (idx, line) in lines.iter().enumerate() {
+        let (span, selected_item) = match line {
+            PickerLine::Header(_) => (1, false),
+            PickerLine::Item { selected, .. } => (item_span, *selected),
+            PickerLine::Empty(_) => (1, false),
+        };
+        layouts.push(LineSpan {
+            index: idx,
+            virtual_row: row,
+            span,
+            selected_item,
+        });
+        row = row.saturating_add(span);
+    }
+    layouts
+}
+
+fn truncate(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        text.to_owned()
+    } else {
+        text.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
+    }
 }
 
 #[cfg(test)]
@@ -437,5 +675,17 @@ mod tests {
         assert_eq!(picker.selected_view_id(), ViewId::new(3));
         picker.handle_key(Key::Up);
         assert_eq!(picker.selected_view_id(), ViewId::new(1));
+    }
+
+    #[test]
+    fn render_buffer_marks_thumbnail_positions() {
+        let mut picker = ViewPicker::new(&views(), &WorkspaceModel::default(), ViewId::first());
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 80, 20));
+        picker.render_buffer(Rect::new(0, 0, 80, 20), &mut buffer).unwrap();
+        let thumbs = picker.thumbnails();
+        assert!(!thumbs.is_empty(), "thumbnails recorded for visible items");
+        for (_, _, col) in thumbs {
+            assert!(*col > 0);
+        }
     }
 }

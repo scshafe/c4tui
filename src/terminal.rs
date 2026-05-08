@@ -7,16 +7,15 @@ use tui_kit::image::{
     picker_placement_id, ImageSurface, ImageSurfaceRegistry, PlaceOptions, MAIN_PLACEMENT_ID,
 };
 use tui_kit::layout::{CanvasMetrics, CellSize};
-use crate::picker::{PickerLine, ViewPicker};
+use crate::picker::ViewPicker;
+use tui_kit::component::Cached;
 use crate::state::RenderFrame;
 use crate::statusbar::{default_footer_bar, default_status_bar, StatusBar, StatusContext};
 use crate::view::{diagram_placement, image_id_for_view, ViewStore};
 use tui_kit::tty::terminal_metrics;
 use anyhow::Result;
 use ratatui::backend::CrosstermBackend;
-use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
 use std::io::{self, Stdout, Write};
 
@@ -164,28 +163,27 @@ impl TerminalSession {
         Ok(())
     }
 
-    pub fn draw_picker(&mut self, picker: &ViewPicker, store: &ViewStore) -> Result<()> {
-        const ITEM_ROW_SPAN: u16 = 3;
+    pub fn draw_picker(
+        &mut self,
+        picker: &mut Cached<ViewPicker>,
+        store: &ViewStore,
+    ) -> Result<()> {
         const THUMB_COLS: u16 = 12;
         const THUMB_ROWS: u16 = 3;
-        let rendered = picker.render();
 
         self.images.delete_placement(MAIN_PLACEMENT_ID)?;
-        let mut thumbs: Vec<(ViewId, u16, u16)> = Vec::new();
         let terminal = self
             .terminal
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("terminal session not initialised"))?;
+        let mut render_result: Result<()> = Ok(());
         terminal.draw(|frame| {
-            let widget = PickerWidget {
-                rendered: &rendered,
-                item_row_span: ITEM_ROW_SPAN,
-                thumb_cols: THUMB_COLS,
-                thumbnails: &mut thumbs,
-            };
-            widget.render(frame.area(), frame.buffer_mut());
+            let area = frame.area();
+            render_result = picker.render_to_buffer(area, frame.buffer_mut());
         })?;
+        render_result?;
 
+        let thumbs = picker.inner().thumbnails().to_vec();
         let placements_to_clear: Vec<u32> = (0..store.views.len())
             .map(picker_placement_id)
             .filter(|id| !thumbs.iter().any(|(vid, _, _)| picker_placement_id(vid.index()) == *id))
@@ -334,7 +332,11 @@ impl TerminalBackend for TerminalSession {
         )
     }
 
-    fn draw_picker(&mut self, picker: &ViewPicker, store: &ViewStore) -> Result<()> {
+    fn draw_picker(
+        &mut self,
+        picker: &mut Cached<ViewPicker>,
+        store: &ViewStore,
+    ) -> Result<()> {
         Self::draw_picker(self, picker, store)
     }
 
@@ -379,172 +381,3 @@ fn position_cursor(row: u16, col: u16) -> Result<()> {
     Ok(())
 }
 
-struct PickerWidget<'a> {
-    rendered: &'a crate::picker::RenderedPicker,
-    item_row_span: u16,
-    thumb_cols: u16,
-    thumbnails: &'a mut Vec<(ViewId, u16, u16)>,
-}
-
-#[derive(Debug)]
-struct LineSpan {
-    index: usize,
-    virtual_row: u16,
-    span: u16,
-    selected_item: bool,
-}
-
-impl<'a> Widget for PickerWidget<'a> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" View Picker ")
-            .title_bottom(" type → filter | Tab → legends | Enter → select | Esc → cancel ");
-        let inner = block.inner(area);
-        block.render(area, buf);
-        if inner.height < 3 || inner.width < 8 {
-            return;
-        }
-
-        let header_avail = inner.width.saturating_sub(1) as usize;
-        Paragraph::new(truncate(&self.rendered.header, header_avail))
-            .render(Rect { x: inner.x, y: inner.y, width: inner.width, height: 1 }, buf);
-
-        let body = Rect {
-            x: inner.x,
-            y: inner.y + 2,
-            width: inner.width,
-            height: inner.height.saturating_sub(2),
-        };
-
-        let layouts = compute_line_spans(&self.rendered.lines, self.item_row_span);
-        let total_virtual = layouts.last().map(|l| l.virtual_row + l.span).unwrap_or(0);
-        let mut scroll: u16 = 0;
-        if let Some(sel) = layouts.iter().find(|l| l.selected_item) {
-            let sel_end = sel.virtual_row + sel.span;
-            if total_virtual > body.height {
-                if sel_end > scroll + body.height {
-                    scroll = sel_end - body.height;
-                }
-                if sel.virtual_row < scroll {
-                    scroll = sel.virtual_row;
-                }
-            }
-        }
-
-        for layout in &layouts {
-            if layout.virtual_row + layout.span <= scroll {
-                continue;
-            }
-            if layout.virtual_row >= scroll + body.height {
-                break;
-            }
-            let screen_row = body.y + layout.virtual_row.saturating_sub(scroll);
-            if screen_row >= body.y + body.height {
-                break;
-            }
-            match &self.rendered.lines[layout.index] {
-                PickerLine::Header(text) => {
-                    let avail = body.width.saturating_sub(1) as usize;
-                    buf.set_string(
-                        body.x,
-                        screen_row,
-                        truncate(text, avail),
-                        Style::default().add_modifier(Modifier::BOLD),
-                    );
-                }
-                PickerLine::Item {
-                    view_id,
-                    marker,
-                    primary,
-                    detail,
-                    selected,
-                } => {
-                    self.thumbnails
-                        .push((*view_id, screen_row + 1, body.x + 1 + 1));
-                    let text_col = body.x + self.thumb_cols + 2;
-                    let text_avail = body.width.saturating_sub(self.thumb_cols + 2 + 1) as usize;
-                    let text = format!("{} {}", marker, truncate(primary, text_avail.saturating_sub(2)));
-                    let style = if *selected {
-                        Style::default().add_modifier(Modifier::REVERSED)
-                    } else {
-                        Style::default()
-                    };
-                    let visible_len = text.chars().count();
-                    buf.set_string(text_col, screen_row, &text, style);
-                    if *selected {
-                        let pad = text_avail.saturating_sub(visible_len);
-                        if pad > 0 {
-                            buf.set_string(
-                                text_col + visible_len as u16,
-                                screen_row,
-                                " ".repeat(pad),
-                                style,
-                            );
-                        }
-                    }
-                    if let Some(d) = detail {
-                        let detail_row = screen_row + 1;
-                        if detail_row < body.y + body.height {
-                            let avail = body.width.saturating_sub(self.thumb_cols + 4 + 1) as usize;
-                            buf.set_string(
-                                text_col + 2,
-                                detail_row,
-                                truncate(d, avail),
-                                Style::default().add_modifier(Modifier::DIM),
-                            );
-                        }
-                    }
-                }
-                PickerLine::Empty(text) => {
-                    buf.set_string(body.x, screen_row, text, Style::default());
-                }
-            }
-        }
-
-        if scroll > 0 {
-            buf.set_string(
-                inner.x + inner.width.saturating_sub(1),
-                body.y,
-                "▲",
-                Style::default(),
-            );
-        }
-        if scroll + body.height < total_virtual {
-            buf.set_string(
-                inner.x + inner.width.saturating_sub(1),
-                body.y + body.height.saturating_sub(1),
-                "▼",
-                Style::default(),
-            );
-        }
-    }
-}
-
-fn compute_line_spans(lines: &[PickerLine], item_span: u16) -> Vec<LineSpan> {
-    let mut layouts = Vec::with_capacity(lines.len());
-    let mut row = 0u16;
-    for (idx, line) in lines.iter().enumerate() {
-        let (span, selected_item) = match line {
-            PickerLine::Header(_) => (1, false),
-            PickerLine::Item { selected, .. } => (item_span, *selected),
-            PickerLine::Empty(_) => (1, false),
-        };
-        layouts.push(LineSpan {
-            index: idx,
-            virtual_row: row,
-            span,
-            selected_item,
-        });
-        row = row.saturating_add(span);
-    }
-    layouts
-}
-
-fn truncate(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        text.to_owned()
-    } else {
-        text.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
-    }
-}
