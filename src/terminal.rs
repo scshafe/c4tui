@@ -16,7 +16,8 @@ use tui_kit::tty::terminal_metrics;
 use anyhow::Result;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Clear, Paragraph, Widget};
+use tui_kit::widgets::dialog::Dialog;
 use std::io::{self, Stdout, Write};
 
 const STATUS_ROWS: u16 = 1;
@@ -260,9 +261,7 @@ impl TerminalSession {
     }
 
     pub fn show_dialog(&mut self, title: &str, message: &str, footer: &str) -> Result<()> {
-        let title_owned = title.to_owned();
-        let message_owned = message.to_owned();
-        let footer_owned = footer.to_owned();
+        let dialog = Dialog::new(title, message).with_footer(footer);
         self.images.delete_placement(MAIN_PLACEMENT_ID)?;
         let terminal = self
             .terminal
@@ -270,15 +269,7 @@ impl TerminalSession {
             .ok_or_else(|| anyhow::anyhow!("terminal session not initialised"))?;
         terminal.draw(|frame| {
             let area = frame.area();
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" {} ", title_owned))
-                .title_bottom(footer_owned.clone());
-            let inner = block.inner(area);
-            block.render(area, frame.buffer_mut());
-            Paragraph::new(message_owned.clone())
-                .wrap(Wrap { trim: false })
-                .render(inner, frame.buffer_mut());
+            dialog.render(area, frame.buffer_mut());
         })?;
         self.images.flush()?;
         Ok(())
