@@ -2,9 +2,9 @@
 
 use crate::config::AppConfig;
 use crate::ids::ViewId;
-use tui_kit::layout::{CanvasMetrics, Placement, ViewTransform};
 use crate::render::RenderedView;
 use crate::workspace::{ElementMetadata, ViewInfo};
+use tui_kit::layout::{CanvasMetrics, Placement, ViewTransform};
 
 // Re-export tui-kit's data types so c4tui shares the wire format with the
 // toolkit. The trait/bar machinery below (StatusSegment, StatusBar) stays
@@ -160,8 +160,10 @@ pub mod segments {
             "zoom"
         }
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
-            Some(StatusFragment::new(format!("zoom {:>3.0}%", ctx.transform.scale * 100.0))
-                .with_priority(200))
+            Some(
+                StatusFragment::new(format!("zoom {:>3.0}%", ctx.transform.scale * 100.0))
+                    .with_priority(200),
+            )
         }
     }
 
@@ -280,10 +282,7 @@ pub mod segments {
             if completed >= total {
                 return None;
             }
-            Some(
-                StatusFragment::new(format!("rendering {completed}/{total}"))
-                    .with_priority(230),
-            )
+            Some(StatusFragment::new(format!("rendering {completed}/{total}")).with_priority(230))
         }
     }
 
@@ -356,8 +355,8 @@ mod tests {
     use super::segments::*;
     use super::*;
     use crate::config::AppConfig;
-    use tui_kit::layout::{CellPixel, CellSize, PixelSize};
     use crate::render::RenderedView;
+    use tui_kit::layout::{CellPixel, CellSize, PixelSize};
 
     fn rendered() -> RenderedView {
         RenderedView {
@@ -382,7 +381,11 @@ mod tests {
         }
     }
 
-    fn ctx<'a>(rendered: &'a RenderedView, view: &'a ViewInfo, config: &'a AppConfig) -> StatusContext<'a> {
+    fn ctx<'a>(
+        rendered: &'a RenderedView,
+        view: &'a ViewInfo,
+        config: &'a AppConfig,
+    ) -> StatusContext<'a> {
         let canvas = CanvasMetrics::new(CellSize::new(120, 30), CellPixel::new(8, 16));
         let placement = ViewTransform::fit().place(rendered.raster_size, canvas);
         StatusContext {
@@ -451,9 +454,7 @@ mod tests {
         let view = view();
         let config = AppConfig::default();
         let ctx = ctx(&rendered, &view, &config);
-        let bar = StatusBar::builder()
-            .add(SegmentSlot::Right, Marker)
-            .build();
+        let bar = StatusBar::builder().add(SegmentSlot::Right, Marker).build();
         let line = bar.render(&ctx, 30);
         assert!(line.ends_with("MARKER"));
     }

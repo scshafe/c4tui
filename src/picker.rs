@@ -7,9 +7,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
-use tui_kit::component::{
-    BufferComponent, ComponentId, ComponentOutcome, DirtyReason, DirtyState,
-};
+use tui_kit::component::{BufferComponent, ComponentId, ComponentOutcome, DirtyReason, DirtyState};
 use tui_kit::input::Key;
 
 #[derive(Debug, Clone)]
@@ -113,7 +111,10 @@ impl ViewPicker {
             Key::CtrlC => PickerOutcome::Cancel,
             Key::Enter => {
                 let visible = self.visible_view_ids();
-                if let Some(target) = visible.iter().find(|id| **id == self.selected_view).copied()
+                if let Some(target) = visible
+                    .iter()
+                    .find(|id| **id == self.selected_view)
+                    .copied()
                 {
                     PickerOutcome::Select(target)
                 } else if let Some(first) = visible.first().copied() {
@@ -208,7 +209,11 @@ impl ViewPicker {
             "showing {}/{} views{}{}",
             visible.len(),
             self.items.len(),
-            if self.show_keys { " (incl. legends)" } else { "" },
+            if self.show_keys {
+                " (incl. legends)"
+            } else {
+                ""
+            },
             if !self.filter.is_empty() {
                 format!("  matching '{}'", self.filter)
             } else {
@@ -260,7 +265,10 @@ impl ViewPicker {
     }
 
     fn effective_selection(&self, visible: &[&PickerItem]) -> Option<ViewId> {
-        if visible.iter().any(|item| item.view_id == self.selected_view) {
+        if visible
+            .iter()
+            .any(|item| item.view_id == self.selected_view)
+        {
             Some(self.selected_view)
         } else {
             visible.first().map(|item| item.view_id)
@@ -370,8 +378,11 @@ impl BufferComponent for ViewPicker {
                         .push((*view_id, screen_row + 1, body.x + 1 + 1));
                     let text_col = body.x + THUMB_COLS + 2;
                     let text_avail = body.width.saturating_sub(THUMB_COLS + 2 + 1) as usize;
-                    let text =
-                        format!("{} {}", marker, truncate(primary, text_avail.saturating_sub(2)));
+                    let text = format!(
+                        "{} {}",
+                        marker,
+                        truncate(primary, text_avail.saturating_sub(2))
+                    );
                     let style = if *selected {
                         Style::default().add_modifier(Modifier::REVERSED)
                     } else {
@@ -393,8 +404,7 @@ impl BufferComponent for ViewPicker {
                     if let Some(d) = detail {
                         let detail_row = screen_row + 1;
                         if detail_row < body.y + body.height {
-                            let avail =
-                                body.width.saturating_sub(THUMB_COLS + 4 + 1) as usize;
+                            let avail = body.width.saturating_sub(THUMB_COLS + 4 + 1) as usize;
                             buffer.set_string(
                                 text_col + 2,
                                 detail_row,
@@ -597,7 +607,11 @@ mod tests {
             view("System Context", ViewKind::SystemContext, "system"),
             view("Containers", ViewKind::Container, "containers"),
             view("Containers (key)", ViewKind::Key, "Containers-key"),
-            view("Agent Coordination", ViewKind::Container, "AgentCoordination"),
+            view(
+                "Agent Coordination",
+                ViewKind::Container,
+                "AgentCoordination",
+            ),
             view(
                 "Agent Coordination (key)",
                 ViewKind::Key,
@@ -681,7 +695,9 @@ mod tests {
     fn render_buffer_marks_thumbnail_positions() {
         let mut picker = ViewPicker::new(&views(), &WorkspaceModel::default(), ViewId::first());
         let mut buffer = Buffer::empty(Rect::new(0, 0, 80, 20));
-        picker.render_buffer(Rect::new(0, 0, 80, 20), &mut buffer).unwrap();
+        picker
+            .render_buffer(Rect::new(0, 0, 80, 20), &mut buffer)
+            .unwrap();
         let thumbs = picker.thumbnails();
         assert!(!thumbs.is_empty(), "thumbnails recorded for visible items");
         for (_, _, col) in thumbs {

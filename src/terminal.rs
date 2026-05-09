@@ -2,22 +2,20 @@ use crate::backend::TerminalBackend;
 use crate::config::{AppConfig, KeyBindings};
 use crate::event::InputEvent;
 use crate::ids::ViewId;
-use tui_kit::input::Key;
-use tui_kit::image::{
-    picker_placement_id, ImageSurface, PlaceOptions, MAIN_PLACEMENT_ID,
-};
-use tui_kit::layout::{CanvasMetrics, CellSize};
 use crate::picker::ViewPicker;
-use tui_kit::component::Cached;
 use crate::state::RenderFrame;
 use crate::statusbar::{default_footer_bar, default_status_bar, StatusBar, StatusContext};
 use crate::view::{diagram_placement, image_id_for_view, ViewStore};
-use tui_kit::tty::terminal_metrics;
 use anyhow::Result;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::{Clear, Paragraph, Widget};
-use tui_kit::widgets::dialog::Dialog;
 use std::io::{self, Write};
+use tui_kit::component::Cached;
+use tui_kit::image::{picker_placement_id, ImageSurface, PlaceOptions, MAIN_PLACEMENT_ID};
+use tui_kit::input::Key;
+use tui_kit::layout::{CanvasMetrics, CellSize};
+use tui_kit::tty::terminal_metrics;
+use tui_kit::widgets::dialog::Dialog;
 
 const STATUS_ROWS: u16 = 1;
 const FOOTER_ROWS: u16 = 1;
@@ -91,7 +89,9 @@ impl TerminalSession {
             .iter()
             .map(|id| store.view(*id).name.clone())
             .collect();
-        let pinned_meta = pinned_element.and_then(|id| store.element_metadata(id)).cloned();
+        let pinned_meta = pinned_element
+            .and_then(|id| store.element_metadata(id))
+            .cloned();
         let rendered = store.rendered_view(view_id)?;
         let breadcrumb_refs: Vec<&str> = breadcrumb_names.iter().map(String::as_str).collect();
         let workspace_path = self.workspace_path.as_deref();
@@ -166,9 +166,15 @@ impl TerminalSession {
         let thumbs = picker.inner().thumbnails().to_vec();
         let placements_to_clear: Vec<u32> = (0..store.views.len())
             .map(picker_placement_id)
-            .filter(|id| !thumbs.iter().any(|(vid, _, _)| picker_placement_id(vid.index()) == *id))
+            .filter(|id| {
+                !thumbs
+                    .iter()
+                    .any(|(vid, _, _)| picker_placement_id(vid.index()) == *id)
+            })
             .collect();
-        self.inner.images().delete_placements_in(placements_to_clear)?;
+        self.inner
+            .images()
+            .delete_placements_in(placements_to_clear)?;
 
         for (view_id, row, col) in &thumbs {
             self.draw_thumbnail(*view_id, *row, *col, THUMB_COLS, THUMB_ROWS, store)?;
@@ -298,11 +304,7 @@ impl TerminalBackend for TerminalSession {
         )
     }
 
-    fn draw_picker(
-        &mut self,
-        picker: &mut Cached<ViewPicker>,
-        store: &ViewStore,
-    ) -> Result<()> {
+    fn draw_picker(&mut self, picker: &mut Cached<ViewPicker>, store: &ViewStore) -> Result<()> {
         Self::draw_picker(self, picker, store)
     }
 
@@ -334,4 +336,3 @@ fn position_cursor(row: u16, col: u16) -> Result<()> {
     write!(io::stdout().lock(), "\x1b[{};{}H", row.max(1), col.max(1))?;
     Ok(())
 }
-

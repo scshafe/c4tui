@@ -1,16 +1,9 @@
 use crate::backend::TerminalBackend;
 use crate::config::AppConfig;
 use crate::event::{Command, InputEvent};
-use tui_kit::events::{
-    AppEvent, AppEventReceiver, AppEventSender, InputEvent as TuiKitInputEvent, SchedulerEvent,
-    TerminalEvent, WatcherEvent,
-};
 use crate::ids::ViewId;
-use tui_kit::input::Key;
 use crate::keymap::{KeyMap, KeyMapExt};
 use crate::picker::{PickerOutcome, ViewPicker};
-use tui_kit::component::{Cached, Component, ComponentOutcome};
-use tui_kit::focus::{FocusConfig, FocusId, FocusManager, FocusNode, FocusScopeKind};
 use crate::render_pool::{RenderPriority, RenderScheduler};
 use crate::state::{AppState, Effect};
 use crate::view::ViewStore;
@@ -20,6 +13,13 @@ use log::{error, info};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::mpsc::TryRecvError;
+use tui_kit::component::{Cached, Component, ComponentOutcome};
+use tui_kit::events::{
+    AppEvent, AppEventReceiver, AppEventSender, InputEvent as TuiKitInputEvent, SchedulerEvent,
+    TerminalEvent, WatcherEvent,
+};
+use tui_kit::focus::{FocusConfig, FocusId, FocusManager, FocusNode, FocusScopeKind};
+use tui_kit::input::Key;
 
 // Modal scope identifiers. c4tui's modes (picker, dialog) push focus scopes
 // with these IDs; routing reads `focus.active_scope_id()` to decide which
@@ -181,18 +181,13 @@ impl App {
                 Ok(())
             }
             AppEvent::Watcher(WatcherEvent::WorkspaceChanged) => {
-                terminal.show_message(
-                    "Workspace changed",
-                    "Re-running Structurizr export.",
-                )?;
+                terminal.show_message("Workspace changed", "Re-running Structurizr export.")?;
                 match self.reload_store() {
                     Ok(()) => {
                         let canvas = terminal.canvas_metrics();
-                        let update = self.state.apply(
-                            Command::ReloadSucceeded,
-                            &mut self.store,
-                            canvas,
-                        )?;
+                        let update =
+                            self.state
+                                .apply(Command::ReloadSucceeded, &mut self.store, canvas)?;
                         if update.effect == Some(Effect::ClearImageCache) {
                             terminal.clear_image_cache()?;
                         }
@@ -251,11 +246,7 @@ impl App {
         }
     }
 
-    fn handle_key_picker(
-        &mut self,
-        key: Key,
-        terminal: &mut impl TerminalBackend,
-    ) -> Result<()> {
+    fn handle_key_picker(&mut self, key: Key, terminal: &mut impl TerminalBackend) -> Result<()> {
         let outcome = {
             let Some(slot) = self.picker_slot.as_mut() else {
                 return Ok(());
@@ -268,12 +259,8 @@ impl App {
             if now != slot.last_hover {
                 if !self.store.has_rendered(now) {
                     let path = self.store.view(now).svg_path.clone();
-                    self.scheduler.request(
-                        now,
-                        RenderPriority::Hover,
-                        path,
-                        self.store.budget(),
-                    );
+                    self.scheduler
+                        .request(now, RenderPriority::Hover, path, self.store.budget());
                 }
                 slot.last_hover = now;
             }
@@ -337,11 +324,8 @@ impl App {
                 self.quit = true;
             }
             Some(Effect::OpenPicker) => {
-                let picker_inner = ViewPicker::new(
-                    &self.store.views,
-                    &self.store.model,
-                    self.state.current(),
-                );
+                let picker_inner =
+                    ViewPicker::new(&self.store.views, &self.store.model, self.state.current());
                 let last_hover = picker_inner.selected_view_id();
                 if !self.store.has_rendered(last_hover) {
                     let path = self.store.view(last_hover).svg_path.clone();
@@ -368,17 +352,13 @@ impl App {
                 }
             }
             Some(Effect::ReloadWorkspace) => {
-                terminal.show_message(
-                    "Reloading workspace...",
-                    "Re-running Structurizr export.",
-                )?;
+                terminal
+                    .show_message("Reloading workspace...", "Re-running Structurizr export.")?;
                 match self.reload_store() {
                     Ok(()) => {
-                        let update = self.state.apply(
-                            Command::ReloadSucceeded,
-                            &mut self.store,
-                            canvas,
-                        )?;
+                        let update =
+                            self.state
+                                .apply(Command::ReloadSucceeded, &mut self.store, canvas)?;
                         if update.effect == Some(Effect::ClearImageCache) {
                             terminal.clear_image_cache()?;
                         }
@@ -410,15 +390,12 @@ impl App {
         Ok(())
     }
 
-
     fn frame_with_progress(&self) -> crate::state::RenderFrame {
         let mut frame = self.state.render_frame();
         let progress = self.scheduler.progress();
         if progress.pending > 0 {
-            frame.render_progress = Some((
-                progress.completed,
-                progress.completed + progress.pending,
-            ));
+            frame.render_progress =
+                Some((progress.completed, progress.completed + progress.pending));
         }
         frame
     }
@@ -482,12 +459,12 @@ mod tests {
     use super::*;
     use crate::backend::fake::FakeTerminalBackend;
     use crate::ids::ViewId;
-    use tui_kit::input::Key;
     use crate::render::RasterBudget;
     use crate::workspace::{ViewInfo, WorkspaceSource};
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
     use std::sync::mpsc;
+    use tui_kit::input::Key;
 
     fn budget() -> RasterBudget {
         RasterBudget {
@@ -496,10 +473,7 @@ mod tests {
         }
     }
 
-    fn test_app_with_real_svgs(
-        dir: &std::path::Path,
-        sink: AppEventSender,
-    ) -> App {
+    fn test_app_with_real_svgs(dir: &std::path::Path, sink: AppEventSender) -> App {
         let parent = dir.join("parent.svg");
         let child = dir.join("child.svg");
         std::fs::write(&parent, r#"<svg width="100" height="100"/>"#).unwrap();
@@ -612,9 +586,7 @@ mod tests {
         let mut terminal = FakeTerminalBackend::new();
         let (event_tx, event_rx) = mpsc::channel();
 
-        event_tx
-            .send(AppEvent::terminal_resize(120, 40))
-            .unwrap();
+        event_tx.send(AppEvent::terminal_resize(120, 40)).unwrap();
         event_tx.send(AppEvent::input_key(Key::CtrlC)).unwrap();
         drop(event_tx);
 
@@ -631,15 +603,9 @@ mod tests {
         let mut terminal = FakeTerminalBackend::new();
         let (event_tx, event_rx) = mpsc::channel();
 
-        event_tx
-            .send(AppEvent::terminal_resize(100, 30))
-            .unwrap();
-        event_tx
-            .send(AppEvent::terminal_resize(120, 40))
-            .unwrap();
-        event_tx
-            .send(AppEvent::terminal_resize(140, 50))
-            .unwrap();
+        event_tx.send(AppEvent::terminal_resize(100, 30)).unwrap();
+        event_tx.send(AppEvent::terminal_resize(120, 40)).unwrap();
+        event_tx.send(AppEvent::terminal_resize(140, 50)).unwrap();
         event_tx.send(AppEvent::input_key(Key::CtrlC)).unwrap();
         drop(event_tx);
 

@@ -20,10 +20,7 @@ impl KeyMapExt for KeyMap {
         let zoom_in = 1.25;
         let zoom_out = 0.8;
 
-        map.bind(
-            KeyTrigger::Special(SpecialKey::CtrlC),
-            PendingCommand::Quit,
-        );
+        map.bind(KeyTrigger::Special(SpecialKey::CtrlC), PendingCommand::Quit);
         map.bind(
             KeyTrigger::Special(SpecialKey::Esc),
             PendingCommand::ClearOrQuit,
@@ -144,8 +141,14 @@ mod tests {
     #[test]
     fn quit_binds_to_q_and_ctrl_c_and_esc_clears_first() {
         let map = defaults();
-        assert!(matches!(map.lookup(Key::Char('q')), Some(PendingCommand::Quit)));
-        assert!(matches!(map.lookup(Key::Char('Q')), Some(PendingCommand::Quit)));
+        assert!(matches!(
+            map.lookup(Key::Char('q')),
+            Some(PendingCommand::Quit)
+        ));
+        assert!(matches!(
+            map.lookup(Key::Char('Q')),
+            Some(PendingCommand::Quit)
+        ));
         assert!(matches!(map.lookup(Key::CtrlC), Some(PendingCommand::Quit)));
         assert!(matches!(
             map.lookup(Key::Esc),
@@ -173,11 +176,17 @@ mod tests {
     fn resolve_translates_mouse_events() {
         let map = defaults();
         assert!(matches!(
-            map.resolve(InputEvent::MouseClick { canvas_x: 0.1, canvas_y: 0.2 }),
+            map.resolve(InputEvent::MouseClick {
+                canvas_x: 0.1,
+                canvas_y: 0.2
+            }),
             PendingCommand::DrillAt { .. }
         ));
         assert!(matches!(
-            map.resolve(InputEvent::MouseWheelUp { canvas_x: 0.5, canvas_y: 0.5 }),
+            map.resolve(InputEvent::MouseWheelUp {
+                canvas_x: 0.5,
+                canvas_y: 0.5
+            }),
             PendingCommand::ZoomAt { .. }
         ));
         assert!(matches!(

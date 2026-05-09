@@ -1,10 +1,10 @@
 use crate::ids::ElementId;
-use tui_kit::layout::PixelSize;
 use anyhow::{anyhow, Context, Result};
 use resvg::{tiny_skia, usvg};
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
+use tui_kit::layout::PixelSize;
 
 #[derive(Debug)]
 pub struct RenderedView {
@@ -102,10 +102,7 @@ fn shared_fontdb() -> Arc<fontdb::Database> {
     DB.get_or_init(|| {
         let mut db = fontdb::Database::new();
         db.load_system_fonts();
-        log::info!(
-            "loaded {} system fonts for SVG text rendering",
-            db.len()
-        );
+        log::info!("loaded {} system fonts for SVG text rendering", db.len());
         Arc::new(db)
     })
     .clone()
@@ -123,7 +120,12 @@ pub fn render_svg(svg_path: &Path, budget: RasterBudget) -> Result<RenderedView>
     let viewport_w = viewport.width() as f32;
     let viewport_h = viewport.height() as f32;
     let crop = if budget.crop_to_content {
-        compute_content_crop(&tree, viewport_w, viewport_h, budget.content_padding_fraction)
+        compute_content_crop(
+            &tree,
+            viewport_w,
+            viewport_h,
+            budget.content_padding_fraction,
+        )
     } else {
         ContentCrop {
             x: 0.0,
@@ -144,8 +146,7 @@ pub fn render_svg(svg_path: &Path, budget: RasterBudget) -> Result<RenderedView>
         pixmap.fill(tiny_skia::Color::from_rgba8(r, g, b, a));
     }
 
-    let transform =
-        tiny_skia::Transform::from_translate(-crop.x, -crop.y).post_scale(scale, scale);
+    let transform = tiny_skia::Transform::from_translate(-crop.x, -crop.y).post_scale(scale, scale);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
     let png = encode_png(pixmap.width(), pixmap.height(), pixmap.data())?;
 
@@ -398,7 +399,8 @@ mod tests {
 
     #[test]
     fn extracts_bboxes_translated_when_cropped() {
-        let svg = br#"<svg><g id="path-element"><path d="M 100 200 L 400 200 L 400 600 Z"/></g></svg>"#;
+        let svg =
+            br#"<svg><g id="path-element"><path d="M 100 200 L 400 200 L 400 600 Z"/></g></svg>"#;
         let tree = usvg::Tree::from_data(svg, &usvg::Options::default()).unwrap();
         let bboxes = extract_element_bboxes(&tree, 1.0, 100.0, 200.0);
         assert_eq!(bboxes[0].x, 0.0);

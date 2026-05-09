@@ -148,4 +148,3 @@ fn init_logging(log_file: Option<&std::path::Path>) -> Result<()> {
     std::io::stderr().flush().ok();
     Ok(())
 }
-

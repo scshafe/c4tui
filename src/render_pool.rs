@@ -42,14 +42,8 @@ impl RenderScheduler {
         budget: RasterBudget,
     ) {
         let id = view_id.index() as u64;
-        self.inner.request(
-            id,
-            priority,
-            RenderRequest {
-                svg_path,
-                budget,
-            },
-        );
+        self.inner
+            .request(id, priority, RenderRequest { svg_path, budget });
     }
 
     pub fn request_all<I>(&mut self, items: I, priority: Priority, budget: RasterBudget)
