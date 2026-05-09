@@ -71,10 +71,6 @@ impl ViewStore {
             .map(|bbox| bbox.element_id.clone()))
     }
 
-    pub const fn len(&self) -> usize {
-        self.views.len()
-    }
-
     pub fn view(&self, id: ViewId) -> &ViewInfo {
         &self.views[id.index()]
     }
@@ -268,7 +264,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(store.len(), 1);
+        assert_eq!(store.views.len(), 1);
         assert_eq!(image_id_for_view(ViewId::first()), 1);
     }
 

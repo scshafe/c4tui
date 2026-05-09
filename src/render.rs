@@ -112,8 +112,10 @@ pub fn render_svg(svg_path: &Path, budget: RasterBudget) -> Result<RenderedView>
     let svg =
         fs::read(svg_path).with_context(|| format!("failed to read {}", svg_path.display()))?;
     let sampled_bg = sample_root_background(&svg);
-    let mut options = usvg::Options::default();
-    options.fontdb = shared_fontdb();
+    let options = usvg::Options {
+        fontdb: shared_fontdb(),
+        ..Default::default()
+    };
     let tree = usvg::Tree::from_data(&svg, &options)
         .with_context(|| format!("failed to parse SVG {}", svg_path.display()))?;
     let viewport = tree.size().to_int_size();
