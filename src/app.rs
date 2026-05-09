@@ -81,7 +81,6 @@ impl App {
         );
         let focus = FocusManager::new(
             FocusConfig {
-                wrap: false,
                 restore_on_scope_pop: true,
                 require_initial_focus: false,
             },
