@@ -2,35 +2,16 @@
 
 use crate::config::AppConfig;
 use crate::ids::ViewId;
-use tui_kit::layout::{CanvasMetrics, Placement, ViewTransform};
 use crate::render::RenderedView;
 use crate::workspace::{ElementMetadata, ViewInfo};
+use tui_kit::layout::{CanvasMetrics, Placement, ViewTransform};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SegmentSlot {
-    Left,
-    Right,
-}
-
-#[derive(Debug, Clone)]
-pub struct StatusFragment {
-    pub text: String,
-    pub priority: u8,
-}
-
-impl StatusFragment {
-    pub fn new(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            priority: 100,
-        }
-    }
-
-    pub fn with_priority(mut self, priority: u8) -> Self {
-        self.priority = priority;
-        self
-    }
-}
+// Re-export tui-kit's data types so c4tui shares the wire format with the
+// toolkit. The trait/bar machinery below (StatusSegment, StatusBar) stays
+// c4tui-internal because StatusContext<'a> has borrowed fields that don't
+// fit tui-kit's `Segment<Ctx>` parameterization (the `Ctx` type can't carry
+// a per-render lifetime when stored in a `Box<dyn Segment<Ctx>>`).
+pub use tui_kit::bar::{SegmentSlot, StatusFragment};
 
 pub struct StatusContext<'a> {
     pub view: &'a ViewInfo,
@@ -75,7 +56,7 @@ impl StatusBar {
         let right = collect(SegmentSlot::Right);
 
         let width = usize::from(width).max(1);
-        layout_status_line(left, right, width, self.separator, self.elide)
+        tui_kit::bar::layout_status_line(left, right, width, self.separator, self.elide)
     }
 }
 
@@ -113,97 +94,6 @@ impl StatusBarBuilder {
             elide: self.elide.unwrap_or("…"),
         }
     }
-}
-
-fn layout_status_line(
-    left: Vec<StatusFragment>,
-    right: Vec<StatusFragment>,
-    width: usize,
-    separator: &str,
-    elide: &str,
-) -> String {
-    let mut tagged: Vec<(SegmentSlot, StatusFragment)> = left
-        .into_iter()
-        .map(|f| (SegmentSlot::Left, f))
-        .chain(right.into_iter().map(|f| (SegmentSlot::Right, f)))
-        .collect();
-    let sep_pad_between_sides = 1;
-
-    loop {
-        let total = compose(&tagged, separator, sep_pad_between_sides).visible_width;
-        if total <= width || tagged.is_empty() {
-            break;
-        }
-        let lowest = tagged
-            .iter()
-            .map(|(_, f)| f.priority)
-            .min()
-            .unwrap_or(u8::MAX);
-        let drop_idx = tagged
-            .iter()
-            .rposition(|(_, f)| f.priority == lowest)
-            .unwrap_or(0);
-        tagged.remove(drop_idx);
-    }
-
-    let composed = compose(&tagged, separator, sep_pad_between_sides);
-    if composed.visible_width <= width {
-        let pad = width - composed.visible_width + sep_pad_between_sides;
-        let mut out = String::with_capacity(width + 8);
-        out.push_str(&composed.left);
-        out.push_str(&" ".repeat(pad));
-        out.push_str(&composed.right);
-        return out;
-    }
-
-    let combined = if composed.right.is_empty() {
-        composed.left
-    } else {
-        format!("{} {}", composed.left, composed.right)
-    };
-    let max_visible = width.saturating_sub(elide.chars().count());
-    let truncated: String = combined.chars().take(max_visible).collect();
-    let mut out = truncated;
-    if visible_width(&out) < width {
-        out.push_str(elide);
-    }
-    out
-}
-
-struct ComposedLine {
-    left: String,
-    right: String,
-    visible_width: usize,
-}
-
-fn compose(
-    tagged: &[(SegmentSlot, StatusFragment)],
-    separator: &str,
-    sep_between_sides: usize,
-) -> ComposedLine {
-    let join = |slot: SegmentSlot| -> String {
-        tagged
-            .iter()
-            .filter(|(s, _)| *s == slot)
-            .map(|(_, f)| f.text.as_str())
-            .collect::<Vec<_>>()
-            .join(separator)
-    };
-    let left = join(SegmentSlot::Left);
-    let right = join(SegmentSlot::Right);
-    let mut visible_width = visible_width(&left) + visible_width(&right);
-    if !left.is_empty() && !right.is_empty() {
-        visible_width += sep_between_sides;
-    }
-    ComposedLine {
-        left,
-        right,
-        visible_width,
-    }
-}
-
-fn visible_width(text: &str) -> usize {
-    text.chars().count()
 }
 
 pub mod segments {
@@ -270,8 +160,10 @@ pub mod segments {
             "zoom"
         }
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
-            Some(StatusFragment::new(format!("zoom {:>3.0}%", ctx.transform.scale * 100.0))
-                .with_priority(200))
+            Some(
+                StatusFragment::new(format!("zoom {:>3.0}%", ctx.transform.scale * 100.0))
+                    .with_priority(200),
+            )
         }
     }
 
@@ -372,7 +264,7 @@ pub mod segments {
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
             let s = ctx.placement.source;
             Some(
-                StatusFragment::new(format!("crop {}×{}@{},{}", s.width, s.height, s.x, s.y))
+                StatusFragment::new(format!("visible {}×{}@{},{}", s.width, s.height, s.x, s.y))
                     .with_priority(100),
             )
         }
@@ -390,10 +282,7 @@ pub mod segments {
             if completed >= total {
                 return None;
             }
-            Some(
-                StatusFragment::new(format!("rendering {completed}/{total}"))
-                    .with_priority(230),
-            )
+            Some(StatusFragment::new(format!("rendering {completed}/{total}")).with_priority(230))
         }
     }
 
@@ -466,8 +355,8 @@ mod tests {
     use super::segments::*;
     use super::*;
     use crate::config::AppConfig;
-    use tui_kit::layout::{CellPixel, CellSize, PixelRect, PixelSize};
     use crate::render::RenderedView;
+    use tui_kit::layout::{CellPixel, CellSize, PixelSize};
 
     fn rendered() -> RenderedView {
         RenderedView {
@@ -492,7 +381,11 @@ mod tests {
         }
     }
 
-    fn ctx<'a>(rendered: &'a RenderedView, view: &'a ViewInfo, config: &'a AppConfig) -> StatusContext<'a> {
+    fn ctx<'a>(
+        rendered: &'a RenderedView,
+        view: &'a ViewInfo,
+        config: &'a AppConfig,
+    ) -> StatusContext<'a> {
         let canvas = CanvasMetrics::new(CellSize::new(120, 30), CellPixel::new(8, 16));
         let placement = ViewTransform::fit().place(rendered.raster_size, canvas);
         StatusContext {
@@ -561,9 +454,7 @@ mod tests {
         let view = view();
         let config = AppConfig::default();
         let ctx = ctx(&rendered, &view, &config);
-        let bar = StatusBar::builder()
-            .add(SegmentSlot::Right, Marker)
-            .build();
+        let bar = StatusBar::builder().add(SegmentSlot::Right, Marker).build();
         let line = bar.render(&ctx, 30);
         assert!(line.ends_with("MARKER"));
     }

@@ -22,12 +22,27 @@ pub enum PendingCommand {
     ShowLegend,
     Inspect,
     ClearOrQuit,
-    Pan { dx_fraction: f32, dy_fraction: f32 },
-    Zoom { factor: f32 },
-    ZoomAt { factor: f32, canvas_x: f32, canvas_y: f32 },
+    Pan {
+        dx_fraction: f32,
+        dy_fraction: f32,
+    },
+    Zoom {
+        factor: f32,
+    },
+    ZoomAt {
+        factor: f32,
+        canvas_x: f32,
+        canvas_y: f32,
+    },
     ResetView,
-    DrillAt { canvas_x: f32, canvas_y: f32 },
-    DragTo { x: u16, y: u16 },
+    DrillAt {
+        canvas_x: f32,
+        canvas_y: f32,
+    },
+    DragTo {
+        x: u16,
+        y: u16,
+    },
     EndDrag,
     Noop,
 }
@@ -46,9 +61,22 @@ impl PendingCommand {
                 canvas_y: 0.5,
             },
             Self::ClearOrQuit => Command::ClearOrQuit,
-            Self::Pan { dx_fraction, dy_fraction } => Command::Pan { dx_fraction, dy_fraction },
-            Self::Zoom { factor } => Command::Zoom { factor, anchor: ZoomAnchor::Center },
-            Self::ZoomAt { factor, canvas_x, canvas_y } => Command::Zoom {
+            Self::Pan {
+                dx_fraction,
+                dy_fraction,
+            } => Command::Pan {
+                dx_fraction,
+                dy_fraction,
+            },
+            Self::Zoom { factor } => Command::Zoom {
+                factor,
+                anchor: ZoomAnchor::Center,
+            },
+            Self::ZoomAt {
+                factor,
+                canvas_x,
+                canvas_y,
+            } => Command::Zoom {
                 factor,
                 anchor: ZoomAnchor::Canvas { canvas_x, canvas_y },
             },
@@ -87,13 +115,29 @@ pub enum Command {
     Help,
     Back,
     ShowLegend,
-    InspectAt { canvas_x: f32, canvas_y: f32 },
+    InspectAt {
+        canvas_x: f32,
+        canvas_y: f32,
+    },
     ClearOrQuit,
-    DrillAt { canvas_x: f32, canvas_y: f32 },
-    Zoom { factor: f32, anchor: ZoomAnchor },
+    DrillAt {
+        canvas_x: f32,
+        canvas_y: f32,
+    },
+    Zoom {
+        factor: f32,
+        anchor: ZoomAnchor,
+    },
     ResetView,
-    Pan { dx_fraction: f32, dy_fraction: f32 },
-    DragTo { x: u16, y: u16, canvas: CanvasMetrics },
+    Pan {
+        dx_fraction: f32,
+        dy_fraction: f32,
+    },
+    DragTo {
+        x: u16,
+        y: u16,
+        canvas: CanvasMetrics,
+    },
     EndDrag,
     Noop,
 }

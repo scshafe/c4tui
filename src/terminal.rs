@@ -2,32 +2,26 @@ use crate::backend::TerminalBackend;
 use crate::config::{AppConfig, KeyBindings};
 use crate::event::InputEvent;
 use crate::ids::ViewId;
-use tui_kit::input::Key;
-use tui_kit::image::{
-    picker_placement_id, ImageSurface, KittyImageRegistry, PlaceOptions, MAIN_PLACEMENT_ID,
-};
-use tui_kit::layout::{CanvasMetrics, CellSize};
-use crate::picker::{PickerLine, ViewPicker};
+use crate::picker::ViewPicker;
 use crate::state::RenderFrame;
 use crate::statusbar::{default_footer_bar, default_status_bar, StatusBar, StatusContext};
-use tui_kit::tty::terminal_metrics;
-use crate::view::{image_id_for_view, ViewStore};
+use crate::view::{diagram_placement, image_id_for_view, ViewStore};
 use anyhow::Result;
-use ratatui::backend::CrosstermBackend;
-use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
-use std::io::{self, Stdout, Write};
+use ratatui::widgets::{Clear, Paragraph, Widget};
+use std::io::{self, Write};
+use tui_kit::component::Cached;
+use tui_kit::image::{picker_placement_id, ImageSurface, PlaceOptions, MAIN_PLACEMENT_ID};
+use tui_kit::input::Key;
+use tui_kit::layout::{CanvasMetrics, CellSize};
+use tui_kit::tty::terminal_metrics;
+use tui_kit::widgets::dialog::Dialog;
 
 const STATUS_ROWS: u16 = 1;
 const FOOTER_ROWS: u16 = 1;
 
-type Term = ratatui::Terminal<CrosstermBackend<Stdout>>;
-
 pub struct TerminalSession {
-    terminal: Option<Term>,
-    images: KittyImageRegistry,
+    inner: tui_kit::terminal::Terminal,
     status_bar: StatusBar,
     footer_bar: StatusBar,
     workspace_path: Option<std::path::PathBuf>,
@@ -36,19 +30,9 @@ pub struct TerminalSession {
 
 impl TerminalSession {
     pub fn enter(config: AppConfig) -> Result<Self> {
-        crossterm::terminal::enable_raw_mode()?;
-        let mut stdout = io::stdout();
-        crossterm::execute!(
-            stdout,
-            crossterm::terminal::EnterAlternateScreen,
-            crossterm::cursor::Hide,
-            crossterm::event::EnableMouseCapture,
-        )?;
-        let backend = CrosstermBackend::new(io::stdout());
-        let terminal = ratatui::Terminal::new(backend)?;
+        let inner = tui_kit::terminal::Terminal::enter()?;
         Ok(Self {
-            terminal: Some(terminal),
-            images: KittyImageRegistry::default(),
+            inner,
             status_bar: default_status_bar(),
             footer_bar: default_footer_bar(),
             workspace_path: None,
@@ -81,10 +65,6 @@ impl TerminalSession {
         CanvasMetrics::new(cells, metrics.cell_pixel.or_fallback())
     }
 
-    fn full_terminal_metrics(&self) -> CanvasMetrics {
-        terminal_metrics()
-    }
-
     fn render_view(
         &mut self,
         view_id: ViewId,
@@ -96,12 +76,12 @@ impl TerminalSession {
         let canvas = self.canvas();
         let raster = store.rendered_view(view_id)?.raster_size;
         let transform = store.transform(view_id);
-        let placement = transform.place(raster, canvas);
+        let placement = diagram_placement(transform, raster, canvas);
         let image_id = image_id_for_view(view_id);
 
         {
             let png = &store.rendered_view(view_id)?.png;
-            self.images.ensure_loaded(image_id, png)?;
+            self.inner.images().ensure_loaded(image_id, png)?;
         }
 
         let view = store.view(view_id).clone();
@@ -109,7 +89,9 @@ impl TerminalSession {
             .iter()
             .map(|id| store.view(*id).name.clone())
             .collect();
-        let pinned_meta = pinned_element.and_then(|id| store.element_metadata(id)).cloned();
+        let pinned_meta = pinned_element
+            .and_then(|id| store.element_metadata(id))
+            .cloned();
         let rendered = store.rendered_view(view_id)?;
         let breadcrumb_refs: Vec<&str> = breadcrumb_names.iter().map(String::as_str).collect();
         let workspace_path = self.workspace_path.as_deref();
@@ -130,11 +112,7 @@ impl TerminalSession {
         let footer_text = self.footer_bar.render(&context, canvas.cells.cols);
 
         let mut canvas_rect = Rect::default();
-        let terminal = self
-            .terminal
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("terminal session not initialised"))?;
-        terminal.draw(|frame| {
+        self.inner.draw(|frame| {
             let chunks = Layout::vertical([
                 Constraint::Length(1),
                 Constraint::Min(0),
@@ -150,57 +128,58 @@ impl TerminalSession {
         let cursor_row = canvas_rect.y + placement.origin.row + 1;
         let cursor_col = canvas_rect.x + placement.origin.col + 1;
         position_cursor(cursor_row, cursor_col)?;
-        self.images.place(PlaceOptions {
+        self.inner.images().place(PlaceOptions {
             image_id,
             placement_id: MAIN_PLACEMENT_ID,
             source: placement.source,
             cell_cols: placement.size.cols,
             cell_rows: placement.size.rows,
         })?;
-        self.images.flush()?;
+        self.inner.images().flush()?;
         Ok(())
     }
 
     pub fn close_picker(&mut self, store: &ViewStore) -> Result<()> {
-        self.images
+        self.inner
+            .images()
             .delete_placements_in((0..store.views.len()).map(picker_placement_id))?;
-        self.images.flush()?;
+        self.inner.images().flush()?;
         Ok(())
     }
 
-    pub fn draw_picker(&mut self, picker: &ViewPicker, store: &ViewStore) -> Result<()> {
-        const ITEM_ROW_SPAN: u16 = 3;
+    pub fn draw_picker(
+        &mut self,
+        picker: &mut Cached<ViewPicker>,
+        store: &ViewStore,
+    ) -> Result<()> {
         const THUMB_COLS: u16 = 12;
         const THUMB_ROWS: u16 = 3;
-        let rendered = picker.render();
 
-        self.images.delete_placement(MAIN_PLACEMENT_ID)?;
-        let mut thumbs: Vec<(ViewId, u16, u16)> = Vec::new();
-        let terminal = self
-            .terminal
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("terminal session not initialised"))?;
-        terminal.draw(|frame| {
-            let widget = PickerWidget {
-                rendered: &rendered,
-                item_row_span: ITEM_ROW_SPAN,
-                thumb_cols: THUMB_COLS,
-                thumb_rows: THUMB_ROWS,
-                thumbnails: &mut thumbs,
-            };
-            widget.render(frame.area(), frame.buffer_mut());
+        self.inner.images().delete_placement(MAIN_PLACEMENT_ID)?;
+        let mut render_result: Result<()> = Ok(());
+        self.inner.draw(|frame| {
+            let area = frame.area();
+            render_result = picker.render_to_buffer(area, frame.buffer_mut());
         })?;
+        render_result?;
 
+        let thumbs = picker.inner().thumbnails().to_vec();
         let placements_to_clear: Vec<u32> = (0..store.views.len())
             .map(picker_placement_id)
-            .filter(|id| !thumbs.iter().any(|(vid, _, _)| picker_placement_id(vid.index()) == *id))
+            .filter(|id| {
+                !thumbs
+                    .iter()
+                    .any(|(vid, _, _)| picker_placement_id(vid.index()) == *id)
+            })
             .collect();
-        self.images.delete_placements_in(placements_to_clear)?;
+        self.inner
+            .images()
+            .delete_placements_in(placements_to_clear)?;
 
         for (view_id, row, col) in &thumbs {
             self.draw_thumbnail(*view_id, *row, *col, THUMB_COLS, THUMB_ROWS, store)?;
         }
-        self.images.flush()?;
+        self.inner.images().flush()?;
         Ok(())
     }
 
@@ -217,9 +196,9 @@ impl TerminalSession {
         let Some(rendered) = store.cached_rendered_view(view_id) else {
             return Ok(false);
         };
-        self.images.ensure_loaded(image_id, &rendered.png)?;
+        self.inner.images().ensure_loaded(image_id, &rendered.png)?;
         position_cursor(row, col)?;
-        self.images.place(PlaceOptions {
+        self.inner.images().place(PlaceOptions {
             image_id,
             placement_id: picker_placement_id(view_id.index()),
             source: tui_kit::layout::PixelRect {
@@ -235,8 +214,8 @@ impl TerminalSession {
     }
 
     fn clear_image_cache_inner(&mut self) -> Result<()> {
-        self.images.forget_all()?;
-        self.images.flush()?;
+        self.inner.images().forget_all()?;
+        self.inner.images().flush()?;
         Ok(())
     }
 
@@ -267,27 +246,13 @@ impl TerminalSession {
     }
 
     pub fn show_dialog(&mut self, title: &str, message: &str, footer: &str) -> Result<()> {
-        let title_owned = title.to_owned();
-        let message_owned = message.to_owned();
-        let footer_owned = footer.to_owned();
-        self.images.delete_placement(MAIN_PLACEMENT_ID)?;
-        let terminal = self
-            .terminal
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("terminal session not initialised"))?;
-        terminal.draw(|frame| {
+        let dialog = Dialog::new(title, message).with_footer(footer);
+        self.inner.images().delete_placement(MAIN_PLACEMENT_ID)?;
+        self.inner.draw(|frame| {
             let area = frame.area();
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" {} ", title_owned))
-                .title_bottom(footer_owned.clone());
-            let inner = block.inner(area);
-            block.render(area, frame.buffer_mut());
-            Paragraph::new(message_owned.clone())
-                .wrap(Wrap { trim: false })
-                .render(inner, frame.buffer_mut());
+            dialog.render(area, frame.buffer_mut());
         })?;
-        self.images.flush()?;
+        self.inner.images().flush()?;
         Ok(())
     }
 
@@ -339,7 +304,7 @@ impl TerminalBackend for TerminalSession {
         )
     }
 
-    fn draw_picker(&mut self, picker: &ViewPicker, store: &ViewStore) -> Result<()> {
+    fn draw_picker(&mut self, picker: &mut Cached<ViewPicker>, store: &ViewStore) -> Result<()> {
         Self::draw_picker(self, picker, store)
     }
 
@@ -364,193 +329,10 @@ impl TerminalBackend for TerminalSession {
     }
 }
 
-impl Drop for TerminalSession {
-    fn drop(&mut self) {
-        self.terminal.take();
-        self.images.shutdown();
-        let _ = io::stdout().flush();
-        let _ = crossterm::execute!(
-            io::stdout(),
-            crossterm::event::DisableMouseCapture,
-            crossterm::cursor::Show,
-            crossterm::terminal::LeaveAlternateScreen,
-        );
-        let _ = crossterm::terminal::disable_raw_mode();
-    }
-}
+// Drop handled by tui_kit::terminal::Terminal: leaves alt-screen, disables
+// mouse capture, restores cursor, exits raw mode, shuts down image registry.
 
 fn position_cursor(row: u16, col: u16) -> Result<()> {
     write!(io::stdout().lock(), "\x1b[{};{}H", row.max(1), col.max(1))?;
     Ok(())
-}
-
-struct PickerWidget<'a> {
-    rendered: &'a crate::picker::RenderedPicker,
-    item_row_span: u16,
-    thumb_cols: u16,
-    thumb_rows: u16,
-    thumbnails: &'a mut Vec<(ViewId, u16, u16)>,
-}
-
-#[derive(Debug)]
-struct LineSpan {
-    index: usize,
-    virtual_row: u16,
-    span: u16,
-    selected_item: bool,
-}
-
-impl<'a> Widget for PickerWidget<'a> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" View Picker ")
-            .title_bottom(" type → filter | Tab → legends | Enter → select | Esc → cancel ");
-        let inner = block.inner(area);
-        block.render(area, buf);
-        if inner.height < 3 || inner.width < 8 {
-            return;
-        }
-
-        let header_avail = inner.width.saturating_sub(1) as usize;
-        Paragraph::new(truncate(&self.rendered.header, header_avail))
-            .render(Rect { x: inner.x, y: inner.y, width: inner.width, height: 1 }, buf);
-
-        let body = Rect {
-            x: inner.x,
-            y: inner.y + 2,
-            width: inner.width,
-            height: inner.height.saturating_sub(2),
-        };
-
-        let layouts = compute_line_spans(&self.rendered.lines, self.item_row_span);
-        let total_virtual = layouts.last().map(|l| l.virtual_row + l.span).unwrap_or(0);
-        let mut scroll: u16 = 0;
-        if let Some(sel) = layouts.iter().find(|l| l.selected_item) {
-            let sel_end = sel.virtual_row + sel.span;
-            if total_virtual > body.height {
-                if sel_end > scroll + body.height {
-                    scroll = sel_end - body.height;
-                }
-                if sel.virtual_row < scroll {
-                    scroll = sel.virtual_row;
-                }
-            }
-        }
-
-        for layout in &layouts {
-            if layout.virtual_row + layout.span <= scroll {
-                continue;
-            }
-            if layout.virtual_row >= scroll + body.height {
-                break;
-            }
-            let screen_row = body.y + layout.virtual_row.saturating_sub(scroll);
-            if screen_row >= body.y + body.height {
-                break;
-            }
-            match &self.rendered.lines[layout.index] {
-                PickerLine::Header(text) => {
-                    let avail = body.width.saturating_sub(1) as usize;
-                    buf.set_string(
-                        body.x,
-                        screen_row,
-                        truncate(text, avail),
-                        Style::default().add_modifier(Modifier::BOLD),
-                    );
-                }
-                PickerLine::Item {
-                    view_id,
-                    marker,
-                    primary,
-                    detail,
-                    selected,
-                } => {
-                    self.thumbnails
-                        .push((*view_id, screen_row + 1, body.x + 1 + 1));
-                    let text_col = body.x + self.thumb_cols + 2;
-                    let text_avail = body.width.saturating_sub(self.thumb_cols + 2 + 1) as usize;
-                    let text = format!("{} {}", marker, truncate(primary, text_avail.saturating_sub(2)));
-                    let style = if *selected {
-                        Style::default().add_modifier(Modifier::REVERSED)
-                    } else {
-                        Style::default()
-                    };
-                    let visible_len = text.chars().count();
-                    buf.set_string(text_col, screen_row, &text, style);
-                    if *selected {
-                        let pad = text_avail.saturating_sub(visible_len);
-                        if pad > 0 {
-                            buf.set_string(
-                                text_col + visible_len as u16,
-                                screen_row,
-                                " ".repeat(pad),
-                                style,
-                            );
-                        }
-                    }
-                    if let Some(d) = detail {
-                        let detail_row = screen_row + 1;
-                        if detail_row < body.y + body.height {
-                            let avail = body.width.saturating_sub(self.thumb_cols + 4 + 1) as usize;
-                            buf.set_string(
-                                text_col + 2,
-                                detail_row,
-                                truncate(d, avail),
-                                Style::default().add_modifier(Modifier::DIM),
-                            );
-                        }
-                    }
-                }
-                PickerLine::Empty(text) => {
-                    buf.set_string(body.x, screen_row, text, Style::default());
-                }
-            }
-        }
-
-        if scroll > 0 {
-            buf.set_string(
-                inner.x + inner.width.saturating_sub(1),
-                body.y,
-                "▲",
-                Style::default(),
-            );
-        }
-        if scroll + body.height < total_virtual {
-            buf.set_string(
-                inner.x + inner.width.saturating_sub(1),
-                body.y + body.height.saturating_sub(1),
-                "▼",
-                Style::default(),
-            );
-        }
-    }
-}
-
-fn compute_line_spans(lines: &[PickerLine], item_span: u16) -> Vec<LineSpan> {
-    let mut layouts = Vec::with_capacity(lines.len());
-    let mut row = 0u16;
-    for (idx, line) in lines.iter().enumerate() {
-        let (span, selected_item) = match line {
-            PickerLine::Header(_) => (1, false),
-            PickerLine::Item { selected, .. } => (item_span, *selected),
-            PickerLine::Empty(_) => (1, false),
-        };
-        layouts.push(LineSpan {
-            index: idx,
-            virtual_row: row,
-            span,
-            selected_item,
-        });
-        row = row.saturating_add(span);
-    }
-    layouts
-}
-
-fn truncate(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        text.to_owned()
-    } else {
-        text.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
-    }
 }

@@ -1,10 +1,10 @@
-use tui_kit::tty::{
-    get_termios, make_raw, set_termios, stdin_is_terminal, stdout_is_terminal, write_stdout_all,
-};
 use std::env;
 use std::fmt;
 use std::io;
 use std::time::{Duration, Instant};
+use tui_kit::tty::{
+    get_termios, make_raw, set_termios, stdin_is_terminal, stdout_is_terminal, write_stdout_all,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Support {
@@ -46,10 +46,14 @@ pub fn detect_capabilities(timeout: Duration, force_probe: bool) -> io::Result<C
         }
         Err(error) => return Err(error),
     };
-    let kitty_graphics =
-        merge_support(baseline.kitty_graphics, session.query_kitty_graphics(timeout)?);
-    let pixel_mouse =
-        merge_support(baseline.pixel_mouse, session.query_sgr_pixel_mouse(timeout)?);
+    let kitty_graphics = merge_support(
+        baseline.kitty_graphics,
+        session.query_kitty_graphics(timeout)?,
+    );
+    let pixel_mouse = merge_support(
+        baseline.pixel_mouse,
+        session.query_sgr_pixel_mouse(timeout)?,
+    );
 
     Ok(Capabilities {
         kitty_graphics,
@@ -276,8 +280,7 @@ mod tests {
     #[test]
     fn kitty_done_predicate_matches_three_byte_marker() {
         let predicate = |bytes: &[u8]| {
-            bytes.windows(3).any(|w| w == b"\x1b_G")
-                && bytes.windows(2).any(|w| w == b"\x1b\\")
+            bytes.windows(3).any(|w| w == b"\x1b_G") && bytes.windows(2).any(|w| w == b"\x1b\\")
         };
         assert!(predicate(b"\x1b_Gi=31;OK\x1b\\"));
         assert!(!predicate(b"\x1b_G"));
@@ -289,6 +292,9 @@ mod tests {
         assert_eq!(merge_support(Support::Yes, Support::No), Support::No);
         assert_eq!(merge_support(Support::No, Support::Yes), Support::Yes);
         assert_eq!(merge_support(Support::Yes, Support::Unknown), Support::Yes);
-        assert_eq!(merge_support(Support::Unknown, Support::Unknown), Support::Unknown);
+        assert_eq!(
+            merge_support(Support::Unknown, Support::Unknown),
+            Support::Unknown
+        );
     }
 }

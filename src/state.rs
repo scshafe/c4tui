@@ -1,8 +1,8 @@
 use crate::event::{Command, ZoomAnchor};
 use crate::ids::{ElementId, ViewId};
-use tui_kit::layout::{CanvasMetrics, ViewTransform};
 use crate::view::ViewStore;
 use anyhow::Result;
+use tui_kit::layout::{CanvasMetrics, ViewTransform};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppState {
@@ -26,10 +26,6 @@ impl Default for AppState {
 impl AppState {
     pub const fn current(&self) -> ViewId {
         self.current
-    }
-
-    pub fn pinned_element(&self) -> Option<&ElementId> {
-        self.pinned_element.as_ref()
     }
 
     pub fn render_frame(&self) -> RenderFrame {
@@ -107,12 +103,9 @@ impl AppState {
                 self.pinned_element = None;
             }
             Command::DrillAt { canvas_x, canvas_y } => {
-                if let Some(child) = store.child_view_at_canvas_point(
-                    self.current,
-                    canvas_x,
-                    canvas_y,
-                    canvas,
-                )? {
+                if let Some(child) =
+                    store.child_view_at_canvas_point(self.current, canvas_x, canvas_y, canvas)?
+                {
                     self.breadcrumbs.push(self.current);
                     self.current = child;
                     self.last_drag = None;
@@ -151,7 +144,11 @@ impl AppState {
             } => {
                 self.pan_current(store, dx_fraction, dy_fraction, canvas)?;
             }
-            Command::DragTo { x, y, canvas: drag_canvas } => {
+            Command::DragTo {
+                x,
+                y,
+                canvas: drag_canvas,
+            } => {
                 if let Some((last_x, last_y)) = self.last_drag {
                     let canvas_cols = drag_canvas.cells.cols.max(1);
                     let canvas_rows = drag_canvas.cells.rows.max(1);
@@ -255,11 +252,11 @@ impl Default for UpdateResult {
 mod tests {
     use super::*;
     use crate::ids::ElementId;
-    use tui_kit::layout::{CellPixel, CellSize};
     use crate::render::RasterBudget;
     use crate::workspace::ViewInfo;
     use std::collections::{HashMap, HashSet};
     use std::fs;
+    use tui_kit::layout::{CellPixel, CellSize};
 
     fn canvas() -> CanvasMetrics {
         CanvasMetrics::new(CellSize::new(80, 24), CellPixel::new(8, 16))
@@ -477,9 +474,7 @@ mod tests {
         assert_eq!(help.effect, Some(Effect::ShowHelp));
         assert!(!help.render);
 
-        let reload = state
-            .apply(Command::Reload, &mut store, canvas())
-            .unwrap();
+        let reload = state.apply(Command::Reload, &mut store, canvas()).unwrap();
         assert_eq!(reload.effect, Some(Effect::ReloadWorkspace));
         assert!(!reload.render);
     }

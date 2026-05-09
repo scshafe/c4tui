@@ -92,9 +92,9 @@ fn run() -> Result<()> {
     let watcher = if config.watch_workspace {
         let workspace_path = workspace.path.clone();
         match tui_kit::watcher::WorkspaceWatcher::spawn(
-            &[workspace_path.as_path()],
-            event_tx.clone(),
+            [workspace_path.as_path()],
             Duration::from_millis(config.watch_debounce_ms),
+            event_tx.clone(),
         ) {
             Ok(w) => Some(w),
             Err(error) => {
@@ -148,4 +148,3 @@ fn init_logging(log_file: Option<&std::path::Path>) -> Result<()> {
     std::io::stderr().flush().ok();
     Ok(())
 }
-

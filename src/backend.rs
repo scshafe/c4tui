@@ -1,17 +1,18 @@
 use crate::config::KeyBindings;
 use crate::event::InputEvent;
-use tui_kit::input::Key;
-use tui_kit::layout::CanvasMetrics;
 use crate::picker::ViewPicker;
 use crate::state::RenderFrame;
 use crate::view::ViewStore;
 use anyhow::Result;
+use tui_kit::component::Cached;
+use tui_kit::input::Key;
+use tui_kit::layout::CanvasMetrics;
 
 pub trait TerminalBackend {
     fn canvas_metrics(&self) -> CanvasMetrics;
     fn translate_key(&self, key: Key) -> InputEvent;
     fn render(&mut self, frame: &RenderFrame, store: &mut ViewStore) -> Result<()>;
-    fn draw_picker(&mut self, picker: &ViewPicker, store: &ViewStore) -> Result<()>;
+    fn draw_picker(&mut self, picker: &mut Cached<ViewPicker>, store: &ViewStore) -> Result<()>;
     fn close_picker(&mut self, store: &ViewStore) -> Result<()>;
     fn clear_image_cache(&mut self) -> Result<()>;
     fn show_message(&mut self, title: &str, message: &str) -> Result<()>;
@@ -22,15 +23,11 @@ pub trait TerminalBackend {
 #[cfg(test)]
 pub mod fake {
     use super::*;
-    use crate::ids::ViewId;
     use tui_kit::layout::{CellPixel, CellSize};
-    use std::collections::VecDeque;
 
     #[derive(Debug)]
     pub struct FakeTerminalBackend {
         canvas: CanvasMetrics,
-        inputs: VecDeque<InputEvent>,
-        view_choices: VecDeque<Option<ViewId>>,
         pub rendered_frames: Vec<RenderFrame>,
         pub cleared_image_cache: usize,
         pub messages: Vec<(String, String)>,
@@ -40,11 +37,9 @@ pub mod fake {
     }
 
     impl FakeTerminalBackend {
-        pub fn new(inputs: impl IntoIterator<Item = InputEvent>) -> Self {
+        pub fn new() -> Self {
             Self {
                 canvas: CanvasMetrics::new(CellSize::new(80, 24), CellPixel::new(8, 16)),
-                inputs: inputs.into_iter().collect(),
-                view_choices: VecDeque::new(),
                 rendered_frames: Vec::new(),
                 cleared_image_cache: 0,
                 messages: Vec::new(),
@@ -52,22 +47,6 @@ pub mod fake {
                 help_count: 0,
                 picker_draws: 0,
             }
-        }
-
-        pub fn with_view_choices(
-            mut self,
-            choices: impl IntoIterator<Item = Option<ViewId>>,
-        ) -> Self {
-            self.view_choices = choices.into_iter().collect();
-            self
-        }
-    }
-
-    impl FakeTerminalBackend {
-        pub fn next_input(&mut self) -> InputEvent {
-            self.inputs
-                .pop_front()
-                .unwrap_or(InputEvent::Key(tui_kit::input::Key::CtrlC))
         }
     }
 
@@ -85,7 +64,11 @@ pub mod fake {
             Ok(())
         }
 
-        fn draw_picker(&mut self, _picker: &ViewPicker, _store: &ViewStore) -> Result<()> {
+        fn draw_picker(
+            &mut self,
+            _picker: &mut Cached<ViewPicker>,
+            _store: &ViewStore,
+        ) -> Result<()> {
             self.picker_draws += 1;
             Ok(())
         }

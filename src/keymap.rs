@@ -2,69 +2,29 @@
 
 use crate::config::KeyBindings;
 use crate::event::{InputEvent, PendingCommand};
-use tui_kit::input::Key;
+use tui_kit::keymap::{KeyMap as KitKeyMap, KeyTrigger, SpecialKey};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum KeyTrigger {
-    Char(char),
-    CharCaseInsensitive(char),
-    Special(SpecialKey),
+/// c4tui's keymap: a `tui_kit::keymap::KeyMap<PendingCommand>` with the
+/// app-defined `defaults` factory and `resolve` for mouse events.
+pub type KeyMap = KitKeyMap<PendingCommand>;
+
+pub trait KeyMapExt {
+    fn defaults(keys: &KeyBindings) -> Self;
+    fn resolve(&self, event: InputEvent) -> PendingCommand;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SpecialKey {
-    Up,
-    Down,
-    Left,
-    Right,
-    Back,
-    Enter,
-    Tab,
-    Esc,
-    CtrlC,
-}
-
-#[derive(Debug, Clone)]
-pub struct KeyBinding {
-    pub trigger: KeyTrigger,
-    pub command: PendingCommand,
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct KeyMap {
-    bindings: Vec<KeyBinding>,
-}
-
-impl KeyMap {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn bind(&mut self, trigger: KeyTrigger, command: PendingCommand) -> &mut Self {
-        self.bindings.retain(|b| b.trigger != trigger);
-        self.bindings.push(KeyBinding { trigger, command });
-        self
-    }
-
-    pub fn lookup(&self, key: Key) -> Option<PendingCommand> {
-        self.bindings
-            .iter()
-            .rev()
-            .find(|binding| binding.trigger.matches(key))
-            .map(|binding| binding.command.clone())
-    }
-
-    pub fn defaults(keys: &KeyBindings) -> Self {
-        let mut map = Self::new();
+impl KeyMapExt for KeyMap {
+    fn defaults(keys: &KeyBindings) -> Self {
+        let mut map: KeyMap = KitKeyMap::new();
         let pan_step = 0.10;
         let zoom_in = 1.25;
         let zoom_out = 0.8;
 
+        map.bind(KeyTrigger::Special(SpecialKey::CtrlC), PendingCommand::Quit);
         map.bind(
-            KeyTrigger::Special(SpecialKey::CtrlC),
-            PendingCommand::Quit,
+            KeyTrigger::Special(SpecialKey::Esc),
+            PendingCommand::ClearOrQuit,
         );
-        map.bind(KeyTrigger::Special(SpecialKey::Esc), PendingCommand::ClearOrQuit);
         map.bind(KeyTrigger::Special(SpecialKey::Back), PendingCommand::Back);
 
         map.bind(
@@ -133,7 +93,7 @@ impl KeyMap {
         map
     }
 
-    pub fn resolve(&self, event: InputEvent) -> PendingCommand {
+    fn resolve(&self, event: InputEvent) -> PendingCommand {
         match event {
             InputEvent::Key(key) => self.lookup(key).unwrap_or(PendingCommand::Noop),
             InputEvent::MouseClick { canvas_x, canvas_y } => {
@@ -155,40 +115,13 @@ impl KeyMap {
     }
 }
 
-impl KeyTrigger {
-    pub fn matches(self, key: Key) -> bool {
-        match (self, key) {
-            (Self::Char(want), Key::Char(got)) => want == got,
-            (Self::CharCaseInsensitive(want), Key::Char(got)) => want.eq_ignore_ascii_case(&got),
-            (Self::Special(want), key) => SpecialKey::from_key(key) == Some(want),
-            _ => false,
-        }
-    }
-}
-
-impl SpecialKey {
-    fn from_key(key: Key) -> Option<Self> {
-        Some(match key {
-            Key::Up => Self::Up,
-            Key::Down => Self::Down,
-            Key::Left => Self::Left,
-            Key::Right => Self::Right,
-            Key::Back => Self::Back,
-            Key::Enter => Self::Enter,
-            Key::Tab => Self::Tab,
-            Key::Esc => Self::Esc,
-            Key::CtrlC => Self::CtrlC,
-            _ => return None,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tui_kit::input::Key;
 
     fn defaults() -> KeyMap {
-        KeyMap::defaults(&KeyBindings::default())
+        <KeyMap as KeyMapExt>::defaults(&KeyBindings::default())
     }
 
     #[test]
@@ -208,8 +141,14 @@ mod tests {
     #[test]
     fn quit_binds_to_q_and_ctrl_c_and_esc_clears_first() {
         let map = defaults();
-        assert!(matches!(map.lookup(Key::Char('q')), Some(PendingCommand::Quit)));
-        assert!(matches!(map.lookup(Key::Char('Q')), Some(PendingCommand::Quit)));
+        assert!(matches!(
+            map.lookup(Key::Char('q')),
+            Some(PendingCommand::Quit)
+        ));
+        assert!(matches!(
+            map.lookup(Key::Char('Q')),
+            Some(PendingCommand::Quit)
+        ));
         assert!(matches!(map.lookup(Key::CtrlC), Some(PendingCommand::Quit)));
         assert!(matches!(
             map.lookup(Key::Esc),
@@ -237,11 +176,17 @@ mod tests {
     fn resolve_translates_mouse_events() {
         let map = defaults();
         assert!(matches!(
-            map.resolve(InputEvent::MouseClick { canvas_x: 0.1, canvas_y: 0.2 }),
+            map.resolve(InputEvent::MouseClick {
+                canvas_x: 0.1,
+                canvas_y: 0.2
+            }),
             PendingCommand::DrillAt { .. }
         ));
         assert!(matches!(
-            map.resolve(InputEvent::MouseWheelUp { canvas_x: 0.5, canvas_y: 0.5 }),
+            map.resolve(InputEvent::MouseWheelUp {
+                canvas_x: 0.5,
+                canvas_y: 0.5
+            }),
             PendingCommand::ZoomAt { .. }
         ));
         assert!(matches!(

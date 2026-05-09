@@ -235,7 +235,10 @@ pub fn load_workspace_model(exported: &ExportedWorkspace) -> WorkspaceModel {
     WorkspaceModel { elements }
 }
 
-fn collect_deployment(elements: &mut HashMap<ElementId, ElementMetadata>, node: StructurizrNodeJson) {
+fn collect_deployment(
+    elements: &mut HashMap<ElementId, ElementMetadata>,
+    node: StructurizrNodeJson,
+) {
     for instance in node.software_system_instances.clone().unwrap_or_default() {
         insert_element(elements, instance, ElementKind::SoftwareSystemInstance);
     }
@@ -260,11 +263,22 @@ fn insert_element<T: ElementJson>(
     let entry = ElementMetadata {
         id: id.clone(),
         name: raw.name().to_owned(),
-        description: raw.description().map(str::to_owned).filter(|s| !s.is_empty()),
-        technology: raw.technology().map(str::to_owned).filter(|s| !s.is_empty()),
+        description: raw
+            .description()
+            .map(str::to_owned)
+            .filter(|s| !s.is_empty()),
+        technology: raw
+            .technology()
+            .map(str::to_owned)
+            .filter(|s| !s.is_empty()),
         tags: raw
             .tags_str()
-            .map(|s| s.split(',').map(|t| t.trim().to_owned()).filter(|t| !t.is_empty()).collect())
+            .map(|s| {
+                s.split(',')
+                    .map(|t| t.trim().to_owned())
+                    .filter(|t| !t.is_empty())
+                    .collect()
+            })
             .unwrap_or_default(),
         kind,
     };
@@ -280,35 +294,75 @@ trait ElementJson {
 }
 
 impl ElementJson for StructurizrElementJson {
-    fn id(&self) -> &str { self.id.as_deref().unwrap_or("") }
-    fn name(&self) -> &str { self.name.as_deref().unwrap_or("") }
-    fn description(&self) -> Option<&str> { self.description.as_deref() }
-    fn technology(&self) -> Option<&str> { self.technology.as_deref() }
-    fn tags_str(&self) -> Option<&str> { self.tags.as_deref() }
+    fn id(&self) -> &str {
+        self.id.as_deref().unwrap_or("")
+    }
+    fn name(&self) -> &str {
+        self.name.as_deref().unwrap_or("")
+    }
+    fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+    fn technology(&self) -> Option<&str> {
+        self.technology.as_deref()
+    }
+    fn tags_str(&self) -> Option<&str> {
+        self.tags.as_deref()
+    }
 }
 
 impl ElementJson for StructurizrSystemJson {
-    fn id(&self) -> &str { self.id.as_deref().unwrap_or("") }
-    fn name(&self) -> &str { self.name.as_deref().unwrap_or("") }
-    fn description(&self) -> Option<&str> { self.description.as_deref() }
-    fn technology(&self) -> Option<&str> { None }
-    fn tags_str(&self) -> Option<&str> { self.tags.as_deref() }
+    fn id(&self) -> &str {
+        self.id.as_deref().unwrap_or("")
+    }
+    fn name(&self) -> &str {
+        self.name.as_deref().unwrap_or("")
+    }
+    fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+    fn technology(&self) -> Option<&str> {
+        None
+    }
+    fn tags_str(&self) -> Option<&str> {
+        self.tags.as_deref()
+    }
 }
 
 impl ElementJson for StructurizrContainerJson {
-    fn id(&self) -> &str { self.id.as_deref().unwrap_or("") }
-    fn name(&self) -> &str { self.name.as_deref().unwrap_or("") }
-    fn description(&self) -> Option<&str> { self.description.as_deref() }
-    fn technology(&self) -> Option<&str> { self.technology.as_deref() }
-    fn tags_str(&self) -> Option<&str> { self.tags.as_deref() }
+    fn id(&self) -> &str {
+        self.id.as_deref().unwrap_or("")
+    }
+    fn name(&self) -> &str {
+        self.name.as_deref().unwrap_or("")
+    }
+    fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+    fn technology(&self) -> Option<&str> {
+        self.technology.as_deref()
+    }
+    fn tags_str(&self) -> Option<&str> {
+        self.tags.as_deref()
+    }
 }
 
 impl ElementJson for StructurizrNodeJson {
-    fn id(&self) -> &str { self.id.as_deref().unwrap_or("") }
-    fn name(&self) -> &str { self.name.as_deref().unwrap_or("") }
-    fn description(&self) -> Option<&str> { self.description.as_deref() }
-    fn technology(&self) -> Option<&str> { self.technology.as_deref() }
-    fn tags_str(&self) -> Option<&str> { self.tags.as_deref() }
+    fn id(&self) -> &str {
+        self.id.as_deref().unwrap_or("")
+    }
+    fn name(&self) -> &str {
+        self.name.as_deref().unwrap_or("")
+    }
+    fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+    fn technology(&self) -> Option<&str> {
+        self.technology.as_deref()
+    }
+    fn tags_str(&self) -> Option<&str> {
+        self.tags.as_deref()
+    }
 }
 
 pub fn discover_views(exported: &ExportedWorkspace) -> Result<Vec<ViewInfo>> {
@@ -329,12 +383,18 @@ pub fn discover_views(exported: &ExportedWorkspace) -> Result<Vec<ViewInfo>> {
             .to_owned();
         let is_legend = stem.ends_with("-key") || stem.ends_with("_key");
         let primary_stem = if is_legend {
-            Some(stem.trim_end_matches("-key").trim_end_matches("_key").to_owned())
+            Some(
+                stem.trim_end_matches("-key")
+                    .trim_end_matches("_key")
+                    .to_owned(),
+            )
         } else {
             None
         };
         let meta_match_stem = primary_stem.clone().unwrap_or_else(|| stem.clone());
-        let meta = metadata.as_ref().and_then(|m| m.find_for_svg_stem(&meta_match_stem));
+        let meta = metadata
+            .as_ref()
+            .and_then(|m| m.find_for_svg_stem(&meta_match_stem));
         let kind = if is_legend {
             ViewKind::Key
         } else {
@@ -595,7 +655,11 @@ fn push_views(
             .or_else(|| view.name.clone())
             .or_else(|| view.title.clone())
             .unwrap_or_else(|| "view".to_owned());
-        let name = view.title.clone().or(view.name.clone()).unwrap_or_else(|| key.clone());
+        let name = view
+            .title
+            .clone()
+            .or(view.name.clone())
+            .unwrap_or_else(|| key.clone());
         let parent_element_id = view
             .container_id
             .clone()

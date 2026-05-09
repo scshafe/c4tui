@@ -1,11 +1,13 @@
 use crate::ids::{ElementId, ViewId};
-use tui_kit::layout::{CanvasMetrics, ImagePoint, ViewTransform};
-#[cfg(test)]
-use tui_kit::layout::Placement;
 use crate::render::{render_svg, RasterBudget, RenderedView};
 use crate::workspace::{ElementMetadata, ExportedWorkspace, ViewInfo, WorkspaceModel};
 use anyhow::{anyhow, bail, Result};
 use std::collections::HashMap;
+use tui_kit::layout::{
+    CanvasMetrics, CellRoundingPolicy, ImageAnchorPolicy, ImageOverflowPolicy, ImagePoint,
+    ImageScaleBasis, ImageZoomLimitPolicy, PixelSize, Placement, PlacementEngine, PlacementPolicy,
+    ViewTransform, MAX_SCALE, MIN_SCALE,
+};
 
 #[derive(Debug)]
 pub struct ViewStore {
@@ -57,7 +59,7 @@ impl ViewStore {
         let transform = self.transform(id);
         let rendered = self.rendered_view(id)?;
         let image_point: ImagePoint =
-            transform.canvas_to_image(canvas_x, canvas_y, rendered.raster_size, canvas);
+            canvas_to_image(transform, canvas_x, canvas_y, rendered.raster_size, canvas);
         if !image_point.inside {
             return Ok(None);
         }
@@ -67,10 +69,6 @@ impl ViewStore {
             .filter(|bbox| bbox.contains(image_point.x, image_point.y))
             .min_by(|left, right| left.area().total_cmp(&right.area()))
             .map(|bbox| bbox.element_id.clone()))
-    }
-
-    pub const fn len(&self) -> usize {
-        self.views.len()
     }
 
     pub fn view(&self, id: ViewId) -> &ViewInfo {
@@ -124,7 +122,7 @@ impl ViewStore {
     #[cfg(test)]
     pub fn placement(&mut self, id: ViewId, canvas: CanvasMetrics) -> Result<Placement> {
         let raster = self.rendered_view(id)?.raster_size;
-        Ok(self.transform(id).place(raster, canvas))
+        Ok(diagram_placement(self.transform(id), raster, canvas))
     }
 
     pub fn child_view_at_canvas_point(
@@ -137,7 +135,7 @@ impl ViewStore {
         let transform = self.transform(id);
         let rendered = self.rendered_view(id)?;
         let image_point: ImagePoint =
-            transform.canvas_to_image(canvas_x, canvas_y, rendered.raster_size, canvas);
+            canvas_to_image(transform, canvas_x, canvas_y, rendered.raster_size, canvas);
         if !image_point.inside {
             return Ok(None);
         }
@@ -170,11 +168,69 @@ pub fn image_id_for_view(id: ViewId) -> u32 {
     (id.index() as u32) + 1
 }
 
+pub fn diagram_placement(
+    transform: ViewTransform,
+    raster: PixelSize,
+    canvas: CanvasMetrics,
+) -> Placement {
+    PlacementEngine::new(diagram_placement_policy())
+        .expect("diagram placement policy is valid")
+        .place(raster, canvas, transform)
+}
+
+fn diagram_placement_policy() -> PlacementPolicy {
+    PlacementPolicy {
+        scale_basis: ImageScaleBasis::FitToArea,
+        zoom_limit: ImageZoomLimitPolicy::ClampScale {
+            min: MIN_SCALE,
+            max: MAX_SCALE,
+        },
+        // Kitty clips an overflowing image by receiving the visible source
+        // rectangle. Logically the image is still fit once, inflated by zoom,
+        // and viewed through the canvas.
+        overflow: ImageOverflowPolicy::CropSourceToArea,
+        anchor: ImageAnchorPolicy::Center,
+        min_visible_pixels: PixelSize::new(1, 1),
+        cell_rounding: CellRoundingPolicy::Nearest,
+    }
+}
+
+fn canvas_to_image(
+    transform: ViewTransform,
+    canvas_x: f32,
+    canvas_y: f32,
+    raster: PixelSize,
+    canvas: CanvasMetrics,
+) -> ImagePoint {
+    let placement = diagram_placement(transform, raster, canvas);
+    let cell_pixel = canvas.cell_pixel.or_fallback();
+    let canvas_x = canvas_x.clamp(0.0, 1.0);
+    let canvas_y = canvas_y.clamp(0.0, 1.0);
+    let canvas_pixels = canvas.pixels();
+    let cursor_pixel_x = canvas_x * canvas_pixels.width as f32;
+    let cursor_pixel_y = canvas_y * canvas_pixels.height as f32;
+    let origin_pixel_x = f32::from(placement.origin.col) * f32::from(cell_pixel.width);
+    let origin_pixel_y = f32::from(placement.origin.row) * f32::from(cell_pixel.height);
+    let target_pixel_w = f32::from(placement.size.cols) * f32::from(cell_pixel.width);
+    let target_pixel_h = f32::from(placement.size.rows) * f32::from(cell_pixel.height);
+    let local_x = (cursor_pixel_x - origin_pixel_x) / target_pixel_w.max(1.0);
+    let local_y = (cursor_pixel_y - origin_pixel_y) / target_pixel_h.max(1.0);
+    let inside = (0.0..=1.0).contains(&local_x) && (0.0..=1.0).contains(&local_y);
+    let local_x = local_x.clamp(0.0, 1.0);
+    let local_y = local_y.clamp(0.0, 1.0);
+
+    ImagePoint {
+        x: placement.source.x as f32 + local_x * placement.source.width as f32,
+        y: placement.source.y as f32 + local_y * placement.source.height as f32,
+        inside,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tui_kit::layout::{CellPixel, CellSize};
     use std::fs;
+    use tui_kit::layout::{CellPixel, CellSize};
 
     fn budget() -> RasterBudget {
         RasterBudget {
@@ -208,7 +264,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(store.len(), 1);
+        assert_eq!(store.views.len(), 1);
         assert_eq!(image_id_for_view(ViewId::first()), 1);
     }
 
@@ -277,5 +333,32 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn zoomed_placement_inflates_then_clips_viewport() {
+        let raster = tui_kit::layout::PixelSize::new(1000, 800);
+        let canvas = canvas();
+        let placement = diagram_placement(ViewTransform::fit().with_scale(2.0), raster, canvas);
+
+        assert!(placement.effective_scale > placement.fit_scale);
+        assert!(placement.unclipped_display_pixels.width > placement.visible_pixels.width);
+        assert!(placement.unclipped_display_pixels.height > placement.visible_pixels.height);
+        assert_eq!(placement.size.cols, canvas.cells.cols);
+        assert_eq!(placement.size.rows, canvas.cells.rows);
+    }
+
+    #[test]
+    fn panning_moves_viewport_without_changing_zoom_scale() {
+        let raster = tui_kit::layout::PixelSize::new(2000, 1000);
+        let canvas = canvas();
+        let zoomed = ViewTransform::fit().with_scale(2.0);
+        let panned = zoomed.panned(0.25, 0.25, raster, canvas);
+        let before = diagram_placement(zoomed, raster, canvas);
+        let after = diagram_placement(panned, raster, canvas);
+
+        assert_eq!(after.effective_scale, before.effective_scale);
+        assert!(after.source.x > before.source.x);
+        assert!(after.source.y > before.source.y);
     }
 }
