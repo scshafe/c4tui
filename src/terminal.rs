@@ -14,6 +14,7 @@ use tui_kit::component::Cached;
 use tui_kit::image::{picker_placement_id, ImageSurface, PlaceOptions, MAIN_PLACEMENT_ID};
 use tui_kit::input::Key;
 use tui_kit::layout::{CanvasMetrics, CellSize};
+use tui_kit::terminal::TerminalConfig;
 use tui_kit::tty::terminal_metrics;
 use tui_kit::widgets::dialog::Dialog;
 
@@ -30,7 +31,8 @@ pub struct TerminalSession {
 
 impl TerminalSession {
     pub fn enter(config: AppConfig) -> Result<Self> {
-        let inner = tui_kit::terminal::Terminal::enter()?;
+        let inner =
+            tui_kit::terminal::Terminal::enter_with_config(TerminalConfig::strict_wezterm_kitty())?;
         Ok(Self {
             inner,
             status_bar: default_status_bar(),
