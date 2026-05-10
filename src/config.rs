@@ -59,12 +59,18 @@ impl Default for PlacementChoiceConfig {
     fn default() -> Self {
         Self {
             scale_basis: ScaleBasisChoice::Fit,
-            // Default: lock the visible region to the image's aspect ratio at
-            // every zoom level (letterbox in canvas). Other modes preserve
-            // pixel aspect (a circle stays a circle) but the visible window
-            // takes the canvas's shape — which feels like the diagram's
-            // overall aspect changed when you zoom.
-            overflow: OverflowChoice::Letterbox,
+            // Default: magnifier behaviour. The image is logically scaled to
+            // `display = image × effective_scale`; the visible region grows
+            // until it hits the image-box bounds (not the image's aspect),
+            // and beyond that the source is sample-cropped through center_x /
+            // center_y. The "if you could see past the image-box" portion of
+            // the logical image is conceptually the part that wasn't sampled.
+            //
+            // `letterbox` is reachable via O when the visible region's shape
+            // (not just the pixel aspect inside it) needs to stay locked to
+            // the image's aspect — useful when the image-box's aspect would
+            // otherwise crop too aggressively.
+            overflow: OverflowChoice::Crop,
         }
     }
 }

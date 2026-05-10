@@ -103,7 +103,7 @@ The `+` / `-` step factors and the diagram placement policy are configurable bot
 
 The footer always shows the current values, formatted as `B:fit O:letterbox Z:×1.25`.
 
-Defaults render the diagram fit to the terminal at zoom 1.0 and lock the visible region to the image's aspect ratio at every zoom level (so the diagram's overall ratio doesn't change as you zoom — the visible region letterboxes within the canvas instead).
+Defaults render the diagram fit to the image-box at zoom 1.0 and use canonical magnifier semantics for higher zooms: the image is logically scaled by the zoom factor; the visible region grows until it hits the image-box bounds; once both image-box dimensions are saturated, the source is sample-cropped through the pan center. The "if you could see past the image-box" portion of the logical image is conceptually the part that wasn't sampled.
 
 ```toml
 [zoom]
@@ -120,13 +120,17 @@ scale_basis = "fit"
 # What happens when zoom > what the canvas can show. Choices:
 #   "fit_within"          — zoom can't grow past fit
 #   "crop"                — sample window scrolls; image always centered+letterboxed
-#   "letterbox"           — (default) visible region is locked to the image's
-#                           aspect at every zoom level; the diagram's overall
-#                           ratio stays the same as you zoom
+#   "crop"                — (default) canonical magnifier: image is logically
+#                           scaled by zoom; visible region grows until it hits
+#                           image-box bounds, then source is sample-cropped
+#                           through the pan center
+#   "letterbox"           — visible region is locked to the image's aspect at
+#                           every zoom level (visible rectangle stops growing
+#                           once one dimension saturates the image aspect)
 #   "overflow_cells"      — cell rect may exceed canvas; c4tui clamps before placing
 #   "overflow_source"     — send full source; terminal scales to canvas-sized cells
 #   "prevent_zoom_beyond" — like fit_within but preserves the requested scale value
-overflow = "letterbox"
+overflow = "crop"
 ```
 
 ## What it does (intended)

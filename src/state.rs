@@ -300,20 +300,19 @@ fn zoom_no_op_reason(
              refused to shrink it further",
         )
     } else if !scale_unchanged && factor > 1.0 {
-        // Scale changed but nothing visible did. The placement engine
-        // constrained the visible region (most likely because the visible
-        // rect already filled the canvas under LetterboxImageAspect, so
-        // further zoom only shrinks the source crop — but if the source crop
-        // also didn't shrink, the zoom_limit policy is at work).
+        // Scale changed but nothing visible did. Two common causes under the
+        // default `crop` policy: (a) the source rect is already a single pixel
+        // wide/tall, so smaller windows can't be sampled; (b) the visible rect
+        // is locked to image aspect under `letterbox`, in which case visible
+        // doesn't grow past the image-aspect rectangle.
         Some(
             "scale advanced but the placement engine produced an identical \
-             placement; the most likely cause is that the visible region is \
-             already at canvas extent under the current overflow policy AND \
-             the source crop did not shrink (i.e., we were already showing \
-             the full image at fit). Try cycling overflow with `O` to one of \
-             the modes that lets cells exceed canvas (overflow_cells / \
-             overflow_source) if you want the image to grow larger than the \
-             terminal viewport.",
+             placement. Common causes: (1) the source crop already saturated \
+             at single-pixel granularity (try cycling Z to a smaller zoom \
+             step so finer increments register); (2) you're in `letterbox` \
+             overflow which locks the visible rectangle to the image aspect \
+             — press O to cycle to `crop` for canonical magnifier behaviour \
+             where the visible region grows to image-box bounds.",
         )
     } else if !scale_unchanged && factor < 1.0 {
         Some(
