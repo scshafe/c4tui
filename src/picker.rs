@@ -587,6 +587,7 @@ mod tests {
     use super::*;
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
+    use tui_kit::component::Component;
 
     fn view(name: &str, kind: ViewKind, key: &str) -> ViewInfo {
         ViewInfo {
@@ -703,5 +704,32 @@ mod tests {
         for (_, _, col) in thumbs {
             assert!(*col > 0);
         }
+    }
+
+    #[test]
+    fn cached_picker_reuses_clean_buffer_and_rerenders_after_input() {
+        let area = Rect::new(0, 0, 80, 20);
+        let mut picker = tui_kit::component::Cached::new(ViewPicker::new(
+            &views(),
+            &WorkspaceModel::default(),
+            ViewId::first(),
+        ));
+        let mut buffer = Buffer::empty(area);
+
+        picker.render_to_buffer(area, &mut buffer).unwrap();
+        picker.render_to_buffer(area, &mut buffer).unwrap();
+
+        assert_eq!(picker.stats().cache_misses, 1);
+        assert_eq!(picker.stats().cache_hits, 1);
+
+        picker.handle_event(&Key::Tab).unwrap();
+        picker.render_to_buffer(area, &mut buffer).unwrap();
+
+        assert_eq!(picker.stats().cache_misses, 2);
+        assert_eq!(picker.stats().cache_hits, 1);
+        assert!(
+            picker.inner().thumbnails().len() > 3,
+            "toggling legend visibility should rerender thumbnail positions"
+        );
     }
 }
