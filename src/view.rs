@@ -1,12 +1,12 @@
+use crate::config::PlacementChoiceConfig;
 use crate::ids::{ElementId, ViewId};
 use crate::render::{render_svg, RasterBudget, RenderedView};
 use crate::workspace::{ElementMetadata, ExportedWorkspace, ViewInfo, WorkspaceModel};
 use anyhow::{anyhow, bail, Result};
 use std::collections::HashMap;
 use tui_kit::layout::{
-    CanvasMetrics, CellRoundingPolicy, ImageAnchorPolicy, ImageOverflowPolicy, ImagePoint,
-    ImageScaleBasis, ImageZoomLimitPolicy, PixelSize, Placement, PlacementEngine, PlacementPolicy,
-    ViewTransform, MAX_SCALE, MIN_SCALE,
+    CanvasMetrics, CellRoundingPolicy, ImageAnchorPolicy, ImagePoint, ImageZoomLimitPolicy,
+    PixelSize, Placement, PlacementEngine, PlacementPolicy, ViewTransform, MAX_SCALE, MIN_SCALE,
 };
 
 #[derive(Debug)]
@@ -16,6 +16,7 @@ pub struct ViewStore {
     rendered: HashMap<ViewId, RenderedView>,
     transforms: HashMap<ViewId, ViewTransform>,
     budget: RasterBudget,
+    placement_policy: PlacementPolicy,
     export_guard: Option<ExportedWorkspace>,
 }
 
@@ -31,6 +32,7 @@ impl ViewStore {
             rendered: HashMap::new(),
             transforms: HashMap::new(),
             budget,
+            placement_policy: diagram_placement_policy(&PlacementChoiceConfig::default()),
             export_guard: None,
         })
     }
@@ -45,6 +47,15 @@ impl ViewStore {
         self
     }
 
+    pub fn with_placement_policy(mut self, policy: PlacementPolicy) -> Self {
+        self.placement_policy = policy;
+        self
+    }
+
+    pub fn placement_policy(&self) -> &PlacementPolicy {
+        &self.placement_policy
+    }
+
     pub fn element_metadata(&self, id: &ElementId) -> Option<&ElementMetadata> {
         self.model.elements.get(id)
     }
@@ -57,9 +68,16 @@ impl ViewStore {
         canvas: CanvasMetrics,
     ) -> Result<Option<ElementId>> {
         let transform = self.transform(id);
+        let policy = self.placement_policy.clone();
         let rendered = self.rendered_view(id)?;
-        let image_point: ImagePoint =
-            canvas_to_image(transform, canvas_x, canvas_y, rendered.raster_size, canvas);
+        let image_point: ImagePoint = canvas_to_image(
+            transform,
+            canvas_x,
+            canvas_y,
+            rendered.raster_size,
+            canvas,
+            &policy,
+        );
         if !image_point.inside {
             return Ok(None);
         }
@@ -122,7 +140,13 @@ impl ViewStore {
     #[cfg(test)]
     pub fn placement(&mut self, id: ViewId, canvas: CanvasMetrics) -> Result<Placement> {
         let raster = self.rendered_view(id)?.raster_size;
-        Ok(diagram_placement(self.transform(id), raster, canvas))
+        let policy = self.placement_policy.clone();
+        Ok(diagram_placement(
+            self.transform(id),
+            raster,
+            canvas,
+            &policy,
+        ))
     }
 
     pub fn child_view_at_canvas_point(
@@ -133,9 +157,16 @@ impl ViewStore {
         canvas: CanvasMetrics,
     ) -> Result<Option<ViewId>> {
         let transform = self.transform(id);
+        let policy = self.placement_policy.clone();
         let rendered = self.rendered_view(id)?;
-        let image_point: ImagePoint =
-            canvas_to_image(transform, canvas_x, canvas_y, rendered.raster_size, canvas);
+        let image_point: ImagePoint = canvas_to_image(
+            transform,
+            canvas_x,
+            canvas_y,
+            rendered.raster_size,
+            canvas,
+            &policy,
+        );
         if !image_point.inside {
             return Ok(None);
         }
@@ -172,23 +203,26 @@ pub fn diagram_placement(
     transform: ViewTransform,
     raster: PixelSize,
     canvas: CanvasMetrics,
+    policy: &PlacementPolicy,
 ) -> Placement {
-    PlacementEngine::new(diagram_placement_policy())
+    PlacementEngine::new(policy.clone())
         .expect("diagram placement policy is valid")
         .place(raster, canvas, transform)
 }
 
-fn diagram_placement_policy() -> PlacementPolicy {
+pub fn diagram_placement_policy(choice: &PlacementChoiceConfig) -> PlacementPolicy {
     PlacementPolicy {
-        scale_basis: ImageScaleBasis::FitToArea,
+        scale_basis: choice.scale_basis.as_policy(),
         zoom_limit: ImageZoomLimitPolicy::ClampScale {
             min: MIN_SCALE,
             max: MAX_SCALE,
         },
-        // Kitty clips an overflowing image by receiving the visible source
-        // rectangle. Logically the image is still fit once, inflated by zoom,
-        // and viewed through the canvas.
-        overflow: ImageOverflowPolicy::CropSourceToArea,
+        // Default behavior is "B" — the image's logical cell rect is allowed
+        // to exceed canvas bounds. Sample windowing still applies internally so
+        // pan via center_x works as before; the consumer (c4tui's terminal
+        // layer) clamps the cell rect before issuing Kitty placements so the
+        // status / footer bars are not overwritten.
+        overflow: choice.overflow.as_policy(),
         anchor: ImageAnchorPolicy::Center,
         min_visible_pixels: PixelSize::new(1, 1),
         cell_rounding: CellRoundingPolicy::Nearest,
@@ -201,8 +235,9 @@ fn canvas_to_image(
     canvas_y: f32,
     raster: PixelSize,
     canvas: CanvasMetrics,
+    policy: &PlacementPolicy,
 ) -> ImagePoint {
-    let placement = diagram_placement(transform, raster, canvas);
+    let placement = diagram_placement(transform, raster, canvas, policy);
     let cell_pixel = canvas.cell_pixel.or_fallback();
     let canvas_x = canvas_x.clamp(0.0, 1.0);
     let canvas_y = canvas_y.clamp(0.0, 1.0);
@@ -335,11 +370,24 @@ mod tests {
         );
     }
 
+    fn legacy_crop_policy() -> PlacementPolicy {
+        diagram_placement_policy(&PlacementChoiceConfig {
+            scale_basis: crate::config::ScaleBasisChoice::Fit,
+            overflow: crate::config::OverflowChoice::Crop,
+        })
+    }
+
     #[test]
-    fn zoomed_placement_inflates_then_clips_viewport() {
+    fn zoomed_placement_inflates_then_clips_viewport_under_crop_policy() {
         let raster = tui_kit::layout::PixelSize::new(1000, 800);
         let canvas = canvas();
-        let placement = diagram_placement(ViewTransform::fit().with_scale(2.0), raster, canvas);
+        let policy = legacy_crop_policy();
+        let placement = diagram_placement(
+            ViewTransform::fit().with_scale(2.0),
+            raster,
+            canvas,
+            &policy,
+        );
 
         assert!(placement.effective_scale > placement.fit_scale);
         assert!(placement.unclipped_display_pixels.width > placement.visible_pixels.width);
@@ -352,10 +400,11 @@ mod tests {
     fn panning_moves_viewport_without_changing_zoom_scale() {
         let raster = tui_kit::layout::PixelSize::new(2000, 1000);
         let canvas = canvas();
+        let policy = legacy_crop_policy();
         let zoomed = ViewTransform::fit().with_scale(2.0);
         let panned = zoomed.panned(0.25, 0.25, raster, canvas);
-        let before = diagram_placement(zoomed, raster, canvas);
-        let after = diagram_placement(panned, raster, canvas);
+        let before = diagram_placement(zoomed, raster, canvas, &policy);
+        let after = diagram_placement(panned, raster, canvas, &policy);
 
         assert_eq!(after.effective_scale, before.effective_scale);
         assert!(after.source.x > before.source.x);

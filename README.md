@@ -91,6 +91,31 @@ fit = "f"
 
 All runtime keybindings are discoverable from the `?` help overlay.
 
+### Zoom and placement
+
+The `+` / `-` step factors and the diagram placement policy are also configurable. Defaults render the diagram fit to the terminal at zoom 1.0 and let the magnified image's logical cell rect exceed the canvas at high zoom (with c4tui clamping the actual Kitty placement so the status / footer bars are preserved).
+
+```toml
+[zoom]
+in_factor = 1.5    # each `+` magnifies by this ratio (>1.0)
+out_factor = 0.667 # each `-` shrinks by this ratio (<1.0)
+
+[placement]
+# Where zoom=1.0 starts. Choices:
+#   "fit"    — image fit to terminal (default; whole diagram visible)
+#   "native" — image at native pixel size (magnifier mode; usually overflows)
+#   "fill"   — image fills both terminal dimensions (crops the longer aspect)
+scale_basis = "fit"
+
+# What happens when zoom > what the canvas can show. Choices:
+#   "fit_within"          — zoom can't grow past fit
+#   "crop"                — sample window scrolls; image always centered+letterboxed
+#   "overflow_cells"      — (default) cell rect may exceed canvas; pan still works
+#   "overflow_source"     — send full source; terminal scales to canvas-sized cells
+#   "prevent_zoom_beyond" — like fit_within but preserves the requested scale value
+overflow = "overflow_cells"
+```
+
 ## What it does (intended)
 
 Open a Structurizr workspace (`workspace.dsl` or `workspace.json`) and browse its views from a terminal. Each view is rendered as a high-DPI raster image, displayed inline via the Kitty graphics protocol. Clicking on an element that has a child view (e.g., a Container in a System Context view) navigates into the corresponding view, mirroring the C4 navigation experience from the official Structurizr web UI — but inside your terminal, in a single static binary, with no daemon.

@@ -80,7 +80,8 @@ impl TerminalSession {
         let canvas = self.canvas();
         let raster = store.rendered_view(view_id)?.raster_size;
         let transform = store.transform(view_id);
-        let placement = diagram_placement(transform, raster, canvas);
+        let policy = store.placement_policy().clone();
+        let placement = diagram_placement(transform, raster, canvas, &policy);
         let image_id = image_id_for_view(view_id);
 
         {
@@ -132,12 +133,18 @@ impl TerminalSession {
         let cursor_row = canvas_rect.y + placement.origin.row + 1;
         let cursor_col = canvas_rect.x + placement.origin.col + 1;
         position_cursor(cursor_row, cursor_col)?;
+        // OverflowCellsBeyondArea may produce cell extents larger than the
+        // canvas. Kitty clips the right edge fine, but a vertical overflow
+        // would walk down into the footer bar — clamp to the canvas rect
+        // before placing so the status / footer rows stay readable.
+        let cell_cols = placement.size.cols.min(canvas_rect.width);
+        let cell_rows = placement.size.rows.min(canvas_rect.height);
         self.inner.images().place(PlaceOptions {
             image_id,
             placement_id: MAIN_PLACEMENT_ID,
             source: placement.source,
-            cell_cols: placement.size.cols,
-            cell_rows: placement.size.rows,
+            cell_cols,
+            cell_rows,
         })?;
         self.inner.images().flush()?;
         Ok(())

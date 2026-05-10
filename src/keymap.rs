@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::config::KeyBindings;
+use crate::config::{AppConfig, KeyBindings, ZoomConfig};
 use crate::event::{InputEvent, PendingCommand};
 use tui_kit::keymap::{KeyMap as KitKeyMap, KeyTrigger, SpecialKey};
 
@@ -10,15 +10,25 @@ pub type KeyMap = KitKeyMap<PendingCommand>;
 
 pub trait KeyMapExt {
     fn defaults(keys: &KeyBindings) -> Self;
+    fn defaults_with(keys: &KeyBindings, zoom: ZoomConfig) -> Self;
+    fn from_app_config(config: &AppConfig) -> Self;
     fn resolve(&self, event: InputEvent) -> PendingCommand;
 }
 
 impl KeyMapExt for KeyMap {
     fn defaults(keys: &KeyBindings) -> Self {
+        Self::defaults_with(keys, ZoomConfig::default())
+    }
+
+    fn from_app_config(config: &AppConfig) -> Self {
+        Self::defaults_with(&config.keys, config.zoom)
+    }
+
+    fn defaults_with(keys: &KeyBindings, zoom: ZoomConfig) -> Self {
         let mut map: KeyMap = KitKeyMap::new();
         let pan_step = 0.10;
-        let zoom_in = 1.25;
-        let zoom_out = 0.8;
+        let zoom_in = zoom.in_factor;
+        let zoom_out = zoom.out_factor;
 
         map.bind(KeyTrigger::Special(SpecialKey::CtrlC), PendingCommand::Quit);
         map.bind(
