@@ -375,7 +375,7 @@ mod tests {
     use crate::workspace::ViewInfo;
     use std::collections::{HashMap, HashSet};
     use std::fs;
-    use tui_kit::layout::{CellPixel, CellSize};
+    use tui_kit::layout::{CellPixel, CellSize, PixelSize, MAX_SCALE};
 
     fn canvas() -> CanvasMetrics {
         CanvasMetrics::new(CellSize::new(80, 24), CellPixel::new(8, 16))
@@ -536,6 +536,69 @@ mod tests {
             )
             .unwrap();
         assert!(store.transform(ViewId::first()).scale < 1.0);
+    }
+
+    #[test]
+    fn zoom_no_op_reason_tracks_tui_kit_visual_equivalence() {
+        let raster = PixelSize::new(100, 100);
+        let canvas = canvas();
+        let before_transform = ViewTransform::fit();
+        let before_placement = before_transform.place(raster, canvas);
+
+        let after_transform = before_transform.zoomed_at(2.0, 0.5, 0.5, raster, canvas);
+        let after_placement = after_transform.place(raster, canvas);
+        assert_eq!(
+            zoom_no_op_reason(
+                2.0,
+                &before_transform,
+                &after_transform,
+                &before_placement,
+                &after_placement,
+            ),
+            None
+        );
+
+        let mut visibly_changed = before_placement;
+        visibly_changed.size.cols = visibly_changed.size.cols.saturating_sub(1);
+        assert_eq!(
+            zoom_no_op_reason(
+                2.0,
+                &before_transform,
+                &after_transform,
+                &before_placement,
+                &visibly_changed,
+            ),
+            None
+        );
+
+        assert!(zoom_no_op_reason(
+            2.0,
+            &before_transform,
+            &after_transform,
+            &before_placement,
+            &before_placement,
+        )
+        .unwrap()
+        .contains("scale advanced"));
+    }
+
+    #[test]
+    fn zoom_no_op_reason_reports_tui_kit_scale_clamps() {
+        let raster = PixelSize::new(100, 100);
+        let canvas = canvas();
+        let before_transform = ViewTransform::fit().with_scale(MAX_SCALE);
+        let after_transform = before_transform.zoomed_at(2.0, 0.5, 0.5, raster, canvas);
+        let placement = before_transform.place(raster, canvas);
+
+        let reason = zoom_no_op_reason(
+            2.0,
+            &before_transform,
+            &after_transform,
+            &placement,
+            &placement,
+        )
+        .unwrap();
+        assert!(reason.contains("MAX_SCALE"));
     }
 
     #[test]
