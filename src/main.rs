@@ -73,7 +73,12 @@ fn run() -> Result<()> {
     let workspace = resolve_workspace(cli.workspace.as_deref().expect("checked above"))?;
     let mut terminal = TerminalSession::enter(config.clone())?;
     terminal.set_workspace_path(workspace.path.clone());
-    let view_store = match load_view_store(&workspace, &cli.svg_format, config.raster_budget) {
+    let view_store = match load_view_store(
+        &workspace,
+        &cli.svg_format,
+        config.raster_budget,
+        &config.placement,
+    ) {
         Ok(store) => store,
         Err(error) => {
             terminal.show_error("Startup failed", &format!("{error:#}"))?;
@@ -121,9 +126,16 @@ fn load_view_store(
     workspace: &WorkspaceSource,
     svg_format: &str,
     budget: RasterBudget,
+    placement: &config::PlacementChoiceConfig,
 ) -> Result<ViewStore> {
     let exported = export_workspace(workspace, svg_format)?;
     let views = discover_views(&exported)?;
     let model = load_workspace_model(&exported);
-    ViewStore::new(views, budget).map(|store| store.with_model(model).with_export(exported))
+    let policy = view::diagram_placement_policy(placement);
+    ViewStore::new(views, budget).map(|store| {
+        store
+            .with_model(model)
+            .with_export(exported)
+            .with_placement_policy(policy)
+    })
 }

@@ -83,7 +83,7 @@ impl App {
         log_buffer: SharedLogBuffer,
         clipboard: Box<dyn Clipboard>,
     ) -> Self {
-        let keymap = <KeyMap as KeyMapExt>::defaults(&config.keys);
+        let keymap = <KeyMap as KeyMapExt>::from_app_config(&config);
         let mut scheduler = RenderScheduler::new(std::num::NonZeroUsize::new(1).unwrap(), sink);
         scheduler.request_all(
             store.render_jobs(),

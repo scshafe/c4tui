@@ -3,11 +3,14 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
+use tui_kit::layout::{ImageOverflowPolicy, ImageScaleBasis};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppConfig {
     pub raster_budget: RasterBudget,
     pub keys: KeyBindings,
+    pub zoom: ZoomConfig,
+    pub placement: PlacementChoiceConfig,
     pub watch_workspace: bool,
     pub watch_debounce_ms: u64,
 }
@@ -17,8 +20,105 @@ impl Default for AppConfig {
         Self {
             raster_budget: RasterBudget::default(),
             keys: KeyBindings::default(),
+            zoom: ZoomConfig::default(),
+            placement: PlacementChoiceConfig::default(),
             watch_workspace: true,
             watch_debounce_ms: 250,
+        }
+    }
+}
+
+/// `+` / `-` zoom step factors. `in_factor` should be > 1.0 (each press
+/// magnifies by that ratio); `out_factor` should be < 1.0 (each press shrinks
+/// by that ratio). Defaults are reciprocals (1.25 / 0.8) so that one in + one
+/// out returns roughly to the starting scale.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ZoomConfig {
+    pub in_factor: f32,
+    pub out_factor: f32,
+}
+
+impl Default for ZoomConfig {
+    fn default() -> Self {
+        Self {
+            in_factor: 1.25,
+            out_factor: 0.8,
+        }
+    }
+}
+
+/// Placement-policy choices c4tui surfaces as runtime config. These map onto
+/// the underlying [`tui_kit::layout::PlacementPolicy`] variants.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlacementChoiceConfig {
+    pub scale_basis: ScaleBasisChoice,
+    pub overflow: OverflowChoice,
+}
+
+impl Default for PlacementChoiceConfig {
+    fn default() -> Self {
+        Self {
+            scale_basis: ScaleBasisChoice::Fit,
+            // Default to "B" — the image's logical cell rect is allowed to
+            // exceed canvas bounds. Pan still works; the consumer (terminal
+            // layer) clamps the cell rect before issuing the Kitty placement.
+            overflow: OverflowChoice::OverflowCells,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScaleBasisChoice {
+    /// At zoom=1.0 the image is fit to the canvas (current default).
+    Fit,
+    /// At zoom=1.0 the image is rendered at its native pixel size; zoom
+    /// multiplies that. Useful as a "magnifier" where the image is bigger
+    /// than the terminal at default zoom and you pan to see other parts.
+    Native,
+    /// At zoom=1.0 the image fills both canvas dimensions (cropping the
+    /// longer aspect rather than letterboxing the shorter one).
+    Fill,
+}
+
+impl ScaleBasisChoice {
+    pub fn as_policy(self) -> ImageScaleBasis {
+        match self {
+            Self::Fit => ImageScaleBasis::FitToArea,
+            Self::Native => ImageScaleBasis::NativePixels,
+            Self::Fill => ImageScaleBasis::FillArea,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OverflowChoice {
+    /// Image is rescaled to always fit canvas; zoom can't grow it beyond fit.
+    FitWithin,
+    /// Sample-window crop with origin centered. Image always visually fills
+    /// the terminal viewport; pan with center_x adjusts which portion shows.
+    Crop,
+    /// (Default — "B".) Cell rect is allowed to exceed canvas bounds and
+    /// `clipped_sides` reports the overflow. The terminal layer clamps the
+    /// rect before placing into Kitty so nothing overlaps the status/footer
+    /// bars; pan still works through the source crop.
+    OverflowCells,
+    /// Send the full source raster and let the terminal scale-to-fit cells.
+    OverflowSource,
+    /// Like FitWithin but the transform's scale value is preserved
+    /// (useful when an external system wants to record zoom intent).
+    PreventZoomBeyond,
+}
+
+impl OverflowChoice {
+    pub fn as_policy(self) -> ImageOverflowPolicy {
+        match self {
+            Self::FitWithin => ImageOverflowPolicy::FitWithinArea,
+            Self::Crop => ImageOverflowPolicy::CropSourceToArea,
+            Self::OverflowCells => ImageOverflowPolicy::OverflowCellsBeyondArea,
+            Self::OverflowSource => ImageOverflowPolicy::OverflowAndClipDestination,
+            Self::PreventZoomBeyond => ImageOverflowPolicy::PreventZoomBeyondArea,
         }
     }
 }
@@ -61,6 +161,20 @@ struct RawConfig {
     watch_workspace: Option<bool>,
     watch_debounce_ms: Option<u64>,
     keybindings: Option<RawKeyBindings>,
+    zoom: Option<RawZoom>,
+    placement: Option<RawPlacement>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawZoom {
+    in_factor: Option<f32>,
+    out_factor: Option<f32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawPlacement {
+    scale_basis: Option<ScaleBasisChoice>,
+    overflow: Option<OverflowChoice>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,6 +235,22 @@ pub fn load_config(path: Option<&Path>) -> Result<AppConfig> {
     }
     if let Some(keys) = raw.keybindings {
         apply_keybindings(&mut config.keys, keys);
+    }
+    if let Some(zoom) = raw.zoom {
+        if let Some(in_factor) = zoom.in_factor {
+            config.zoom.in_factor = in_factor.clamp(1.001, 8.0);
+        }
+        if let Some(out_factor) = zoom.out_factor {
+            config.zoom.out_factor = out_factor.clamp(0.125, 0.999);
+        }
+    }
+    if let Some(placement) = raw.placement {
+        if let Some(scale_basis) = placement.scale_basis {
+            config.placement.scale_basis = scale_basis;
+        }
+        if let Some(overflow) = placement.overflow {
+            config.placement.overflow = overflow;
+        }
     }
     Ok(config)
 }
