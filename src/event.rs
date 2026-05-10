@@ -45,6 +45,9 @@ pub enum PendingCommand {
     },
     EndDrag,
     ToggleLog,
+    CycleScaleBasis,
+    CycleOverflow,
+    CycleZoomStep,
     Noop,
 }
 
@@ -86,6 +89,9 @@ impl PendingCommand {
             Self::DragTo { x, y } => Command::DragTo { x, y, canvas },
             Self::EndDrag => Command::EndDrag,
             Self::ToggleLog => Command::ToggleLog,
+            Self::CycleScaleBasis => Command::CycleScaleBasis,
+            Self::CycleOverflow => Command::CycleOverflow,
+            Self::CycleZoomStep => Command::CycleZoomStep,
             Self::Noop => Command::Noop,
         }
     }
@@ -142,6 +148,9 @@ pub enum Command {
     },
     EndDrag,
     ToggleLog,
+    CycleScaleBasis,
+    CycleOverflow,
+    CycleZoomStep,
     Noop,
 }
 

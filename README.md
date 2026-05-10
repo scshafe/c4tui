@@ -93,7 +93,17 @@ All runtime keybindings are discoverable from the `?` help overlay.
 
 ### Zoom and placement
 
-The `+` / `-` step factors and the diagram placement policy are also configurable. Defaults render the diagram fit to the terminal at zoom 1.0 and let the magnified image's logical cell rect exceed the canvas at high zoom (with c4tui clamping the actual Kitty placement so the status / footer bars are preserved).
+The `+` / `-` step factors and the diagram placement policy are configurable both via TOML and at runtime:
+
+| key | what it does |
+|---|---|
+| `B` | cycle scale basis (`fit` → `native` → `fill` → `fit` …) |
+| `O` | cycle overflow policy (six modes; see below) |
+| `Z` | cycle zoom step preset (`×1.10` → `×1.25` → `×1.50` → `×2.00` → `×3.00` →  …) |
+
+The footer always shows the current values, formatted as `B:fit O:letterbox Z:×1.25`.
+
+Defaults render the diagram fit to the terminal at zoom 1.0 and lock the visible region to the image's aspect ratio at every zoom level (so the diagram's overall ratio doesn't change as you zoom — the visible region letterboxes within the canvas instead).
 
 ```toml
 [zoom]
@@ -110,10 +120,13 @@ scale_basis = "fit"
 # What happens when zoom > what the canvas can show. Choices:
 #   "fit_within"          — zoom can't grow past fit
 #   "crop"                — sample window scrolls; image always centered+letterboxed
-#   "overflow_cells"      — (default) cell rect may exceed canvas; pan still works
+#   "letterbox"           — (default) visible region is locked to the image's
+#                           aspect at every zoom level; the diagram's overall
+#                           ratio stays the same as you zoom
+#   "overflow_cells"      — cell rect may exceed canvas; c4tui clamps before placing
 #   "overflow_source"     — send full source; terminal scales to canvas-sized cells
 #   "prevent_zoom_beyond" — like fit_within but preserves the requested scale value
-overflow = "overflow_cells"
+overflow = "letterbox"
 ```
 
 ## What it does (intended)

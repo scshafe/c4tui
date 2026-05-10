@@ -52,6 +52,10 @@ impl ViewStore {
         self
     }
 
+    pub fn set_placement_policy(&mut self, policy: PlacementPolicy) {
+        self.placement_policy = policy;
+    }
+
     pub fn placement_policy(&self) -> &PlacementPolicy {
         &self.placement_policy
     }
