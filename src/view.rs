@@ -5,8 +5,13 @@ use crate::workspace::{ElementMetadata, ExportedWorkspace, ViewInfo, WorkspaceMo
 use anyhow::{anyhow, bail, Result};
 use std::collections::HashMap;
 use tui_kit::layout::{
-    CanvasMetrics, CellRoundingPolicy, ImageAnchorPolicy, ImagePoint, ImageZoomLimitPolicy,
-    PixelSize, Placement, PlacementEngine, PlacementPolicy, ViewTransform, MAX_SCALE, MIN_SCALE,
+    CanvasMetrics, CellRect, CellRoundingPolicy, ClippedSides, ImageAnchorPolicy, ImagePoint,
+    ImageScaleBasis, ImageZoomLimitPolicy, PixelSize, Placement, PlacementAnchor, PlacementEngine,
+    PlacementPolicy, ViewTransform, MAX_SCALE, MIN_SCALE,
+};
+use tui_kit::widgets::image_viewport::{
+    ImageScale, ImageViewportPlacement, ImageViewportWidget, PixelDistance, ResizePolicy,
+    ScaledPixelOffset, StepDirection, ViewportAxis, ViewportImage, ZoomDirection, ZoomFactor,
 };
 
 #[derive(Debug)]
@@ -15,9 +20,15 @@ pub struct ViewStore {
     pub model: WorkspaceModel,
     rendered: HashMap<ViewId, RenderedView>,
     transforms: HashMap<ViewId, ViewTransform>,
+    viewports: HashMap<ViewId, ImageViewportWidget>,
     budget: RasterBudget,
     placement_policy: PlacementPolicy,
     export_guard: Option<ExportedWorkspace>,
+}
+
+pub struct ViewportRenderParts<'a> {
+    pub png: &'a [u8],
+    pub widget: &'a mut ImageViewportWidget,
 }
 
 impl ViewStore {
@@ -31,6 +42,7 @@ impl ViewStore {
             model: WorkspaceModel::default(),
             rendered: HashMap::new(),
             transforms: HashMap::new(),
+            viewports: HashMap::new(),
             budget,
             placement_policy: diagram_placement_policy(&PlacementChoiceConfig::default()),
             export_guard: None,
@@ -54,10 +66,8 @@ impl ViewStore {
 
     pub fn set_placement_policy(&mut self, policy: PlacementPolicy) {
         self.placement_policy = policy;
-    }
-
-    pub fn placement_policy(&self) -> &PlacementPolicy {
-        &self.placement_policy
+        self.viewports.clear();
+        self.transforms.clear();
     }
 
     pub fn element_metadata(&self, id: &ElementId) -> Option<&ElementMetadata> {
@@ -71,20 +81,11 @@ impl ViewStore {
         canvas_y: f32,
         canvas: CanvasMetrics,
     ) -> Result<Option<ElementId>> {
-        let transform = self.transform(id);
-        let policy = self.placement_policy.clone();
-        let rendered = self.rendered_view(id)?;
-        let image_point: ImagePoint = canvas_to_image(
-            transform,
-            canvas_x,
-            canvas_y,
-            rendered.raster_size,
-            canvas,
-            &policy,
-        );
+        let image_point = self.image_point_at_canvas(id, canvas_x, canvas_y, canvas)?;
         if !image_point.inside {
             return Ok(None);
         }
+        let rendered = self.rendered_view(id)?;
         Ok(rendered
             .bboxes
             .iter()
@@ -118,6 +119,8 @@ impl ViewStore {
 
     pub fn insert_rendered(&mut self, id: ViewId, rendered: RenderedView) {
         self.rendered.insert(id, rendered);
+        self.viewports.remove(&id);
+        self.transforms.remove(&id);
     }
 
     pub fn budget(&self) -> RasterBudget {
@@ -137,20 +140,122 @@ impl ViewStore {
         self.transforms.get(&id).copied().unwrap_or_default()
     }
 
-    pub fn set_transform(&mut self, id: ViewId, transform: ViewTransform) {
-        self.transforms.insert(id, transform);
+    pub fn placement(&mut self, id: ViewId, canvas: CanvasMetrics) -> Result<Placement> {
+        self.ensure_viewport(id, canvas)?;
+        let Some(widget) = self.viewports.get(&id) else {
+            bail!("viewport was not cached after insertion");
+        };
+        let placement = widget
+            .placement()?
+            .ok_or_else(|| anyhow!("viewport has no visible placement"))?;
+        Ok(status_placement(widget, placement))
     }
 
-    #[cfg(test)]
-    pub fn placement(&mut self, id: ViewId, canvas: CanvasMetrics) -> Result<Placement> {
-        let raster = self.rendered_view(id)?.raster_size;
-        let policy = self.placement_policy.clone();
-        Ok(diagram_placement(
-            self.transform(id),
-            raster,
-            canvas,
-            &policy,
-        ))
+    pub fn viewport_render_parts(
+        &mut self,
+        id: ViewId,
+        canvas: CanvasMetrics,
+    ) -> Result<ViewportRenderParts<'_>> {
+        self.ensure_viewport(id, canvas)?;
+        let png = self
+            .rendered
+            .get(&id)
+            .ok_or_else(|| anyhow!("rendered view was not cached after viewport insertion"))?
+            .png
+            .as_slice();
+        let widget = self
+            .viewports
+            .get_mut(&id)
+            .ok_or_else(|| anyhow!("viewport was not cached after insertion"))?;
+        Ok(ViewportRenderParts { png, widget })
+    }
+
+    pub fn reset_viewport(&mut self, id: ViewId, canvas: CanvasMetrics) -> Result<()> {
+        self.ensure_viewport(id, canvas)?;
+        let scale_basis = self.placement_policy.scale_basis;
+        let Some(widget) = self.viewports.get_mut(&id) else {
+            bail!("viewport was not cached after insertion");
+        };
+        reset_widget_to_canvas(widget, scale_basis)?;
+        self.sync_transform_from_viewport(id);
+        Ok(())
+    }
+
+    pub fn zoom_view(&mut self, id: ViewId, factor: f32, canvas: CanvasMetrics) -> Result<()> {
+        if (factor - 1.0).abs() < f32::EPSILON {
+            return Ok(());
+        }
+        self.ensure_viewport(id, canvas)?;
+        let Some(widget) = self.viewports.get_mut(&id) else {
+            bail!("viewport was not cached after insertion");
+        };
+        let (direction, factor) = if factor > 1.0 {
+            (ZoomDirection::In, factor as f64)
+        } else {
+            (ZoomDirection::Out, (1.0 / factor.max(f32::EPSILON)) as f64)
+        };
+        widget.set_zoom(ZoomFactor::new(factor)?);
+        widget.apply_zoom(direction)?;
+        self.sync_transform_from_viewport(id);
+        Ok(())
+    }
+
+    pub fn pan_view(
+        &mut self,
+        id: ViewId,
+        dx_fraction: f32,
+        dy_fraction: f32,
+        canvas: CanvasMetrics,
+    ) -> Result<()> {
+        self.ensure_viewport(id, canvas)?;
+        let Some(widget) = self.viewports.get_mut(&id) else {
+            bail!("viewport was not cached after insertion");
+        };
+        let pixels = canvas.pixels();
+        apply_pan_step(widget, ViewportAxis::X, dx_fraction * pixels.width as f32);
+        apply_pan_step(widget, ViewportAxis::Y, dy_fraction * pixels.height as f32);
+        self.sync_transform_from_viewport(id);
+        Ok(())
+    }
+
+    fn image_point_at_canvas(
+        &mut self,
+        id: ViewId,
+        canvas_x: f32,
+        canvas_y: f32,
+        canvas: CanvasMetrics,
+    ) -> Result<ImagePoint> {
+        self.ensure_viewport(id, canvas)?;
+        self.viewports
+            .get(&id)
+            .ok_or_else(|| anyhow!("viewport was not cached after insertion"))?
+            .normalized_to_image(canvas_x, canvas_y)
+            .map_err(Into::into)
+    }
+
+    fn ensure_viewport(&mut self, id: ViewId, canvas: CanvasMetrics) -> Result<()> {
+        if !self.viewports.contains_key(&id) {
+            let rendered = self.rendered_view(id)?;
+            let image = ViewportImage::new(rendered.raster_size, rendered.rgba.clone())?;
+            let mut widget = ImageViewportWidget::from_image(image, canvas);
+            widget.set_resize_policy(ResizePolicy::PreserveCenter);
+            reset_widget_to_canvas(&mut widget, self.placement_policy.scale_basis)?;
+            self.viewports.insert(id, widget);
+        }
+
+        let Some(widget) = self.viewports.get_mut(&id) else {
+            bail!("viewport was not cached after insertion");
+        };
+        widget.update_canvas(canvas);
+        self.sync_transform_from_viewport(id);
+        Ok(())
+    }
+
+    fn sync_transform_from_viewport(&mut self, id: ViewId) {
+        let Some(widget) = self.viewports.get(&id) else {
+            return;
+        };
+        self.transforms.insert(id, transform_from_widget(widget));
     }
 
     pub fn child_view_at_canvas_point(
@@ -160,20 +265,11 @@ impl ViewStore {
         canvas_y: f32,
         canvas: CanvasMetrics,
     ) -> Result<Option<ViewId>> {
-        let transform = self.transform(id);
-        let policy = self.placement_policy.clone();
-        let rendered = self.rendered_view(id)?;
-        let image_point: ImagePoint = canvas_to_image(
-            transform,
-            canvas_x,
-            canvas_y,
-            rendered.raster_size,
-            canvas,
-            &policy,
-        );
+        let image_point = self.image_point_at_canvas(id, canvas_x, canvas_y, canvas)?;
         if !image_point.inside {
             return Ok(None);
         }
+        let rendered = self.rendered_view(id)?;
         let hit_element = rendered
             .bboxes
             .iter()
@@ -201,6 +297,108 @@ impl ViewStore {
 
 pub fn image_id_for_view(id: ViewId) -> u32 {
     (id.index() as u32) + 1
+}
+
+fn reset_widget_to_canvas(
+    widget: &mut ImageViewportWidget,
+    scale_basis: ImageScaleBasis,
+) -> Result<()> {
+    let image = widget.viewport().image().size();
+    let canvas = widget.widget_pixels();
+    let scale = initial_scale(image, canvas, scale_basis);
+    widget.set_scale(ImageScale::new(scale)?);
+    let theoretical = widget.viewport().theoretical_size()?;
+    widget.set_offset(centered_offset(theoretical, canvas));
+    Ok(())
+}
+
+fn initial_scale(image: PixelSize, canvas: PixelSize, scale_basis: ImageScaleBasis) -> f64 {
+    match scale_basis {
+        ImageScaleBasis::FitToArea => fit_scale(image, canvas),
+        ImageScaleBasis::NativePixels => 1.0,
+        ImageScaleBasis::FillArea => {
+            let width = canvas.width.max(1) as f64 / image.width.max(1) as f64;
+            let height = canvas.height.max(1) as f64 / image.height.max(1) as f64;
+            width.max(height).max(f64::EPSILON)
+        }
+        ImageScaleBasis::ExplicitScale(scale) => f64::from(scale).max(f64::EPSILON),
+        _ => fit_scale(image, canvas),
+    }
+}
+
+fn fit_scale(image: PixelSize, canvas: PixelSize) -> f64 {
+    let width = canvas.width.max(1) as f64 / image.width.max(1) as f64;
+    let height = canvas.height.max(1) as f64 / image.height.max(1) as f64;
+    width.min(height).max(f64::EPSILON)
+}
+
+fn centered_offset(theoretical: PixelSize, canvas: PixelSize) -> ScaledPixelOffset {
+    ScaledPixelOffset::new(
+        (i64::from(theoretical.width) - i64::from(canvas.width)) / 2,
+        (i64::from(theoretical.height) - i64::from(canvas.height)) / 2,
+    )
+}
+
+fn apply_pan_step(widget: &mut ImageViewportWidget, axis: ViewportAxis, delta: f32) {
+    let pixels = delta.abs().round() as u32;
+    if pixels == 0 {
+        return;
+    }
+    widget.set_step(axis, PixelDistance::new(pixels));
+    let direction = if delta < 0.0 {
+        StepDirection::Negative
+    } else {
+        StepDirection::Positive
+    };
+    widget.apply_step(axis, direction);
+}
+
+fn transform_from_widget(widget: &ImageViewportWidget) -> ViewTransform {
+    let image = widget.viewport().image().size();
+    let canvas = widget.widget_pixels();
+    let fit = fit_scale(image, canvas);
+    let center = widget.normalized_to_image(0.5, 0.5).unwrap_or(ImagePoint {
+        x: image.width as f32 / 2.0,
+        y: image.height as f32 / 2.0,
+        inside: false,
+    });
+    ViewTransform {
+        scale: (widget.viewport().scale().get() / fit.max(f64::EPSILON)) as f32,
+        center_x: (center.x / image.width.max(1) as f32).clamp(0.0, 1.0),
+        center_y: (center.y / image.height.max(1) as f32).clamp(0.0, 1.0),
+    }
+}
+
+fn status_placement(widget: &ImageViewportWidget, placement: ImageViewportPlacement) -> Placement {
+    let image = widget.viewport().image().size();
+    let canvas = widget.widget_pixels();
+    let fit = fit_scale(image, canvas) as f32;
+    let effective_scale = widget.viewport().scale().get() as f32;
+    let transform = transform_from_widget(widget);
+    Placement {
+        source: placement.source,
+        size: CellRect {
+            cols: placement.cell_cols,
+            rows: placement.cell_rows,
+        },
+        origin: placement.origin,
+        effective_scale,
+        fit_scale: fit,
+        visible_pixels: placement.visible_pixels,
+        unclipped_display_pixels: placement.theoretical_pixels,
+        clipped_sides: ClippedSides {
+            left: placement.source.x > 0,
+            right: placement.source.x.saturating_add(placement.source.width) < image.width,
+            top: placement.source.y > 0,
+            bottom: placement.source.y.saturating_add(placement.source.height) < image.height,
+        },
+        anchor: PlacementAnchor {
+            image_x: transform.center_x * image.width as f32,
+            image_y: transform.center_y * image.height as f32,
+            normalized_x: transform.center_x,
+            normalized_y: transform.center_y,
+        },
+    }
 }
 
 pub fn diagram_placement(
@@ -250,9 +448,6 @@ fn canvas_to_image(
     let cursor_pixel_y = canvas_y * canvas_pixels.height as f32;
     let origin_pixel_x = f32::from(placement.origin.col) * f32::from(cell_pixel.width);
     let origin_pixel_y = f32::from(placement.origin.row) * f32::from(cell_pixel.height);
-    // The terminal layer clamps logical overflow placements to the canvas before
-    // issuing the Kitty command, so hit-testing must use the displayed cell rect
-    // rather than the unclipped logical size reported by tui-kit.
     let displayed_cols = placement.size.cols.min(canvas.cells.cols);
     let displayed_rows = placement.size.rows.min(canvas.cells.rows);
     let target_pixel_w = f32::from(displayed_cols) * f32::from(cell_pixel.width);
@@ -262,7 +457,6 @@ fn canvas_to_image(
     let inside = (0.0..=1.0).contains(&local_x) && (0.0..=1.0).contains(&local_y);
     let local_x = local_x.clamp(0.0, 1.0);
     let local_y = local_y.clamp(0.0, 1.0);
-
     ImagePoint {
         x: placement.source.x as f32 + local_x * placement.source.width as f32,
         y: placement.source.y as f32 + local_y * placement.source.height as f32,

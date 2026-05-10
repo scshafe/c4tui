@@ -6,19 +6,20 @@ use crate::log_view::LogView;
 use crate::picker::ViewPicker;
 use crate::state::RenderFrame;
 use crate::statusbar::{default_footer_bar, default_status_bar, StatusBar, StatusContext};
-use crate::view::{diagram_placement, image_id_for_view, ViewStore};
+use crate::view::{image_id_for_view, ViewStore};
 use anyhow::Result;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
-use std::io::{self, Write};
 use tui_kit::component::Cached;
-use tui_kit::image::{picker_placement_id, ImageSurface, PlaceOptions, MAIN_PLACEMENT_ID};
+use tui_kit::image::{picker_placement_id, ImageSurface, MAIN_PLACEMENT_ID};
 use tui_kit::input::Key;
-use tui_kit::layout::{CanvasMetrics, CellSize};
+use tui_kit::layout::{CanvasMetrics, CellArea, CellSize};
 use tui_kit::terminal::TerminalConfig;
-use tui_kit::tty::terminal_metrics;
 use tui_kit::widgets::dialog::Dialog;
+use tui_kit::widgets::image_viewport::{
+    ImageViewportInitialScale, ImageViewportOptions, ResizePolicy, ViewportImage,
+};
 
 const STATUS_ROWS: u16 = 1;
 const FOOTER_ROWS: u16 = 1;
@@ -60,7 +61,7 @@ impl TerminalSession {
     }
 
     pub fn canvas(&self) -> CanvasMetrics {
-        let metrics = terminal_metrics();
+        let metrics = self.inner.metrics();
         let reserved = STATUS_ROWS + FOOTER_ROWS;
         let cells = CellSize::new(
             metrics.cells.cols,
@@ -78,16 +79,9 @@ impl TerminalSession {
         store: &mut ViewStore,
     ) -> Result<()> {
         let canvas = self.canvas();
-        let raster = store.rendered_view(view_id)?.raster_size;
-        let transform = store.transform(view_id);
-        let policy = store.placement_policy().clone();
-        let placement = diagram_placement(transform, raster, canvas, &policy);
         let image_id = image_id_for_view(view_id);
-
-        {
-            let png = &store.rendered_view(view_id)?.png;
-            self.inner.images().ensure_loaded(image_id, png)?;
-        }
+        let placement = store.placement(view_id, canvas)?;
+        let transform = store.transform(view_id);
 
         let view = store.view(view_id).clone();
         let breadcrumb_names: Vec<String> = breadcrumbs
@@ -130,22 +124,24 @@ impl TerminalSession {
             canvas_rect = chunks[1];
         })?;
 
-        let cursor_row = canvas_rect.y + placement.origin.row + 1;
-        let cursor_col = canvas_rect.x + placement.origin.col + 1;
-        position_cursor(cursor_row, cursor_col)?;
-        // OverflowCellsBeyondArea may produce cell extents larger than the
-        // canvas. Kitty clips the right edge fine, but a vertical overflow
-        // would walk down into the footer bar — clamp to the canvas rect
-        // before placing so the status / footer rows stay readable.
-        let cell_cols = placement.size.cols.min(canvas_rect.width);
-        let cell_rows = placement.size.rows.min(canvas_rect.height);
-        self.inner.images().place(PlaceOptions {
+        let screen_canvas = CanvasMetrics::new(
+            CellSize::new(canvas_rect.width, canvas_rect.height),
+            canvas.cell_pixel.or_fallback(),
+        );
+        let target = CellArea::new(
+            canvas_rect.x,
+            canvas_rect.y,
+            canvas_rect.width,
+            canvas_rect.height,
+        );
+        let parts = store.viewport_render_parts(view_id, screen_canvas)?;
+        self.inner.render_image_viewport(
+            parts.widget,
             image_id,
-            placement_id: MAIN_PLACEMENT_ID,
-            source: placement.source,
-            cell_cols,
-            cell_rows,
-        })?;
+            MAIN_PLACEMENT_ID,
+            parts.png,
+            target,
+        )?;
         self.inner.images().flush()?;
         Ok(())
     }
@@ -163,9 +159,6 @@ impl TerminalSession {
         picker: &mut Cached<ViewPicker>,
         store: &ViewStore,
     ) -> Result<()> {
-        const THUMB_COLS: u16 = 12;
-        const THUMB_ROWS: u16 = 3;
-
         self.inner.images().delete_placement(MAIN_PLACEMENT_ID)?;
         let mut render_result: Result<()> = Ok(());
         self.inner.draw(|frame| {
@@ -180,15 +173,15 @@ impl TerminalSession {
             .filter(|id| {
                 !thumbs
                     .iter()
-                    .any(|(vid, _, _)| picker_placement_id(vid.index()) == *id)
+                    .any(|thumb| picker_placement_id(thumb.view_id.index()) == *id)
             })
             .collect();
         self.inner
             .images()
             .delete_placements_in(placements_to_clear)?;
 
-        for (view_id, row, col) in &thumbs {
-            self.draw_thumbnail(*view_id, *row, *col, THUMB_COLS, THUMB_ROWS, store)?;
+        for thumb in &thumbs {
+            self.draw_thumbnail(thumb.view_id, thumb.area, store)?;
         }
         self.inner.images().flush()?;
         Ok(())
@@ -197,30 +190,25 @@ impl TerminalSession {
     fn draw_thumbnail(
         &mut self,
         view_id: ViewId,
-        row: u16,
-        col: u16,
-        cols: u16,
-        rows: u16,
+        area: CellArea,
         store: &ViewStore,
     ) -> Result<bool> {
         let image_id = image_id_for_view(view_id);
         let Some(rendered) = store.cached_rendered_view(view_id) else {
             return Ok(false);
         };
-        self.inner.images().ensure_loaded(image_id, &rendered.png)?;
-        position_cursor(row, col)?;
-        self.inner.images().place(PlaceOptions {
+        let image = ViewportImage::new(rendered.raster_size, rendered.rgba.clone())?;
+        self.inner.render_viewport_image(
+            image,
             image_id,
-            placement_id: picker_placement_id(view_id.index()),
-            source: tui_kit::layout::PixelRect {
-                x: 0,
-                y: 0,
-                width: rendered.raster_size.width,
-                height: rendered.raster_size.height,
+            picker_placement_id(view_id.index()),
+            &rendered.png,
+            area,
+            ImageViewportOptions {
+                initial_scale: ImageViewportInitialScale::FitToBox,
+                resize_policy: ResizePolicy::PreserveTopLeft,
             },
-            cell_cols: cols,
-            cell_rows: rows,
-        })?;
+        )?;
         Ok(true)
     }
 
@@ -365,11 +353,6 @@ impl TerminalBackend for TerminalSession {
 
 // Drop handled by tui_kit::terminal::Terminal: leaves alt-screen, disables
 // mouse capture, restores cursor, exits raw mode, shuts down image registry.
-
-fn position_cursor(row: u16, col: u16) -> Result<()> {
-    write!(io::stdout().lock(), "\x1b[{};{}H", row.max(1), col.max(1))?;
-    Ok(())
-}
 
 fn render_log_view(
     area: Rect,

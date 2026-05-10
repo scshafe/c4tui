@@ -9,6 +9,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use tui_kit::component::{BufferComponent, ComponentId, ComponentOutcome, DirtyReason, DirtyState};
 use tui_kit::input::Key;
+use tui_kit::layout::CellArea;
 
 #[derive(Debug, Clone)]
 pub struct PickerItem {
@@ -29,7 +30,13 @@ pub struct ViewPicker {
     show_keys: bool,
     selected_view: ViewId,
     dirty: DirtyState,
-    last_thumbnails: Vec<(ViewId, u16, u16)>,
+    last_thumbnails: Vec<ThumbnailCellArea>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThumbnailCellArea {
+    pub view_id: ViewId,
+    pub area: CellArea,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -60,8 +67,9 @@ pub enum PickerLine {
     Empty(String),
 }
 
-const ITEM_ROW_SPAN: u16 = 3;
-const THUMB_COLS: u16 = 12;
+const TILE_MIN_COLS: u16 = 22;
+const TILE_ROWS: u16 = 8;
+const THUMB_ROWS: u16 = 5;
 
 impl ViewPicker {
     pub fn new(views: &[ViewInfo], model: &WorkspaceModel, current: ViewId) -> Self {
@@ -233,10 +241,10 @@ impl ViewPicker {
         self.selected_view
     }
 
-    /// Last-render thumbnail placements: `(view_id, screen_row, screen_col)`.
+    /// Last-render thumbnail placements.
     /// Re-populated on every [`render_buffer`] call; the slice is a snapshot
     /// of the most recent render and remains valid until the next one.
-    pub fn thumbnails(&self) -> &[(ViewId, u16, u16)] {
+    pub fn thumbnails(&self) -> &[ThumbnailCellArea] {
         &self.last_thumbnails
     }
 
@@ -302,6 +310,9 @@ impl BufferComponent for ViewPicker {
     fn render_buffer(&mut self, area: Rect, buffer: &mut Buffer) -> Result<()> {
         let rendered = self.render();
         self.last_thumbnails.clear();
+        let visible_refs = self.visible_items();
+        let selected = self.effective_selection(&visible_refs);
+        let visible: Vec<PickerItem> = visible_refs.into_iter().cloned().collect();
 
         let block = Block::default()
             .borders(Borders::ALL)
@@ -331,111 +342,7 @@ impl BufferComponent for ViewPicker {
             height: inner.height.saturating_sub(2),
         };
 
-        let layouts = compute_line_spans(&rendered.lines, ITEM_ROW_SPAN);
-        let total_virtual = layouts.last().map(|l| l.virtual_row + l.span).unwrap_or(0);
-        let mut scroll: u16 = 0;
-        if let Some(sel) = layouts.iter().find(|l| l.selected_item) {
-            let sel_end = sel.virtual_row + sel.span;
-            if total_virtual > body.height {
-                if sel_end > scroll + body.height {
-                    scroll = sel_end - body.height;
-                }
-                if sel.virtual_row < scroll {
-                    scroll = sel.virtual_row;
-                }
-            }
-        }
-
-        for layout in &layouts {
-            if layout.virtual_row + layout.span <= scroll {
-                continue;
-            }
-            if layout.virtual_row >= scroll + body.height {
-                break;
-            }
-            let screen_row = body.y + layout.virtual_row.saturating_sub(scroll);
-            if screen_row >= body.y + body.height {
-                break;
-            }
-            match &rendered.lines[layout.index] {
-                PickerLine::Header(text) => {
-                    let avail = body.width.saturating_sub(1) as usize;
-                    buffer.set_string(
-                        body.x,
-                        screen_row,
-                        truncate(text, avail),
-                        Style::default().add_modifier(Modifier::BOLD),
-                    );
-                }
-                PickerLine::Item {
-                    view_id,
-                    marker,
-                    primary,
-                    detail,
-                    selected,
-                } => {
-                    self.last_thumbnails
-                        .push((*view_id, screen_row + 1, body.x + 1 + 1));
-                    let text_col = body.x + THUMB_COLS + 2;
-                    let text_avail = body.width.saturating_sub(THUMB_COLS + 2 + 1) as usize;
-                    let text = format!(
-                        "{} {}",
-                        marker,
-                        truncate(primary, text_avail.saturating_sub(2))
-                    );
-                    let style = if *selected {
-                        Style::default().add_modifier(Modifier::REVERSED)
-                    } else {
-                        Style::default()
-                    };
-                    let visible_len = text.chars().count();
-                    buffer.set_string(text_col, screen_row, &text, style);
-                    if *selected {
-                        let pad = text_avail.saturating_sub(visible_len);
-                        if pad > 0 {
-                            buffer.set_string(
-                                text_col + visible_len as u16,
-                                screen_row,
-                                " ".repeat(pad),
-                                style,
-                            );
-                        }
-                    }
-                    if let Some(d) = detail {
-                        let detail_row = screen_row + 1;
-                        if detail_row < body.y + body.height {
-                            let avail = body.width.saturating_sub(THUMB_COLS + 4 + 1) as usize;
-                            buffer.set_string(
-                                text_col + 2,
-                                detail_row,
-                                truncate(d, avail),
-                                Style::default().add_modifier(Modifier::DIM),
-                            );
-                        }
-                    }
-                }
-                PickerLine::Empty(text) => {
-                    buffer.set_string(body.x, screen_row, text, Style::default());
-                }
-            }
-        }
-
-        if scroll > 0 {
-            buffer.set_string(
-                inner.x + inner.width.saturating_sub(1),
-                body.y,
-                "▲",
-                Style::default(),
-            );
-        }
-        if scroll + body.height < total_virtual {
-            buffer.set_string(
-                inner.x + inner.width.saturating_sub(1),
-                body.y + body.height.saturating_sub(1),
-                "▼",
-                Style::default(),
-            );
-        }
+        self.render_grid(body, buffer, &visible, selected);
         Ok(())
     }
 
@@ -458,6 +365,132 @@ impl BufferComponent for ViewPicker {
     fn clear_dirty(&mut self) {
         self.dirty.clear();
     }
+}
+
+impl ViewPicker {
+    fn render_grid(
+        &mut self,
+        body: Rect,
+        buffer: &mut Buffer,
+        visible: &[PickerItem],
+        selected: Option<ViewId>,
+    ) {
+        if visible.is_empty() {
+            let text = if self.items.is_empty() {
+                "No views available".to_owned()
+            } else {
+                format!("No views match '{}'", self.filter)
+            };
+            buffer.set_string(body.x, body.y, text, Style::default());
+            return;
+        }
+
+        let columns = grid_columns(body.width, visible.len());
+        let tile_cols = body.width / columns;
+        let selected_idx = visible
+            .iter()
+            .position(|item| Some(item.view_id) == selected)
+            .unwrap_or(0);
+        let selected_row = selected_idx as u16 / columns;
+        let total_rows = ((visible.len() as u16).saturating_add(columns - 1)) / columns;
+        let total_virtual = total_rows.saturating_mul(TILE_ROWS);
+        let selected_top = selected_row.saturating_mul(TILE_ROWS);
+        let selected_bottom = selected_top.saturating_add(TILE_ROWS);
+        let scroll = if total_virtual <= body.height {
+            0
+        } else if selected_bottom > body.height {
+            selected_bottom.saturating_sub(body.height)
+        } else {
+            0
+        };
+
+        for (idx, item) in visible.iter().enumerate() {
+            let grid_col = idx as u16 % columns;
+            let grid_row = idx as u16 / columns;
+            let virtual_y = grid_row.saturating_mul(TILE_ROWS);
+            if virtual_y + TILE_ROWS <= scroll || virtual_y >= scroll + body.height {
+                continue;
+            }
+
+            let tile_x = body.x.saturating_add(grid_col.saturating_mul(tile_cols));
+            let tile_y = body.y.saturating_add(virtual_y.saturating_sub(scroll));
+            if tile_y >= body.y + body.height {
+                continue;
+            }
+
+            let tile_width = if grid_col + 1 == columns {
+                body.width
+                    .saturating_sub(tile_cols.saturating_mul(columns.saturating_sub(1)))
+            } else {
+                tile_cols
+            };
+            if tile_width < 4 {
+                continue;
+            }
+
+            let is_selected = Some(item.view_id) == selected;
+            let style = if is_selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            let marker = if is_selected { ">" } else { " " };
+            let title = format!("{marker} {}", item.name);
+            buffer.set_string(
+                tile_x,
+                tile_y,
+                truncate(&title, tile_width.saturating_sub(1) as usize),
+                style,
+            );
+
+            let image_y = tile_y.saturating_add(1);
+            if image_y < body.y + body.height {
+                let image_rows = THUMB_ROWS.min((body.y + body.height).saturating_sub(image_y));
+                let image_cols = tile_width.saturating_sub(2);
+                if image_rows > 0 && image_cols > 0 {
+                    let image_x = tile_x.saturating_add(1);
+                    self.last_thumbnails.push(ThumbnailCellArea {
+                        view_id: item.view_id,
+                        area: CellArea::new(image_x, image_y, image_cols, image_rows),
+                    });
+                }
+            }
+
+            let key_row = tile_y.saturating_add(THUMB_ROWS).saturating_add(1);
+            if key_row < body.y + body.height {
+                buffer.set_string(
+                    tile_x,
+                    key_row,
+                    truncate(&item.key, tile_width.saturating_sub(1) as usize),
+                    Style::default().add_modifier(Modifier::DIM),
+                );
+            }
+        }
+
+        if scroll > 0 {
+            buffer.set_string(
+                body.x + body.width.saturating_sub(1),
+                body.y,
+                "▲",
+                Style::default(),
+            );
+        }
+        if scroll + body.height < total_virtual {
+            buffer.set_string(
+                body.x + body.width.saturating_sub(1),
+                body.y + body.height.saturating_sub(1),
+                "▼",
+                Style::default(),
+            );
+        }
+    }
+}
+
+fn grid_columns(width: u16, items: usize) -> u16 {
+    if items == 0 {
+        return 1;
+    }
+    (width / TILE_MIN_COLS).max(1).min(items as u16)
 }
 
 fn matches_filter(filter: &str, item: &PickerItem) -> bool {
@@ -544,34 +577,6 @@ fn kind_heading(kind: ViewKind) -> String {
         ViewKind::Unknown => "Other",
     };
     format!("── {label} ──")
-}
-
-#[derive(Debug)]
-struct LineSpan {
-    index: usize,
-    virtual_row: u16,
-    span: u16,
-    selected_item: bool,
-}
-
-fn compute_line_spans(lines: &[PickerLine], item_span: u16) -> Vec<LineSpan> {
-    let mut layouts = Vec::with_capacity(lines.len());
-    let mut row = 0u16;
-    for (idx, line) in lines.iter().enumerate() {
-        let (span, selected_item) = match line {
-            PickerLine::Header(_) => (1, false),
-            PickerLine::Item { selected, .. } => (item_span, *selected),
-            PickerLine::Empty(_) => (1, false),
-        };
-        layouts.push(LineSpan {
-            index: idx,
-            virtual_row: row,
-            span,
-            selected_item,
-        });
-        row = row.saturating_add(span);
-    }
-    layouts
 }
 
 fn truncate(text: &str, max: usize) -> String {
@@ -700,8 +705,10 @@ mod tests {
             .unwrap();
         let thumbs = picker.thumbnails();
         assert!(!thumbs.is_empty(), "thumbnails recorded for visible items");
-        for (_, _, col) in thumbs {
-            assert!(*col > 0);
+        for thumb in thumbs {
+            assert!(thumb.area.origin.col > 0);
+            assert!(thumb.area.size.cols > 0);
+            assert!(thumb.area.size.rows > 0);
         }
     }
 }

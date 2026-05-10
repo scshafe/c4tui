@@ -107,7 +107,14 @@ pub mod segments {
             "app_name"
         }
         fn render(&self, _ctx: &StatusContext<'_>) -> Option<StatusFragment> {
-            Some(StatusFragment::new("c4tui").with_priority(255))
+            Some(
+                StatusFragment::new(format!(
+                    "c4tui [{}] | [{}]",
+                    env!("C4TUI_BUILD_TIME_HHMM"),
+                    tui_kit::BUILD_TIME_HHMM
+                ))
+                .with_priority(255),
+            )
         }
     }
 
@@ -387,6 +394,7 @@ mod tests {
             natural_size: PixelSize::new(2000, 1000),
             raster_size: PixelSize::new(800, 400),
             png: Vec::new(),
+            rgba: vec![0; 800 * 400 * 4],
             bboxes: Vec::new(),
         }
     }

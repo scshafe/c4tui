@@ -60,16 +60,10 @@ impl Default for PlacementChoiceConfig {
         Self {
             scale_basis: ScaleBasisChoice::Fit,
             // Default: magnifier behaviour. The image is logically scaled to
-            // `display = image × effective_scale`; the visible region grows
-            // until it hits the image-box bounds (not the image's aspect),
-            // and beyond that the source is sample-cropped through center_x /
-            // center_y. The "if you could see past the image-box" portion of
-            // the logical image is conceptually the part that wasn't sampled.
-            //
-            // `letterbox` is reachable via O when the visible region's shape
-            // (not just the pixel aspect inside it) needs to stay locked to
-            // the image's aspect — useful when the image-box's aspect would
-            // otherwise crop too aggressively.
+            // `display = image × effective_scale`; the visible region is the
+            // intersection of that theoretical image and the image-box bounds,
+            // and source pixels are cropped through center_x / center_y as zoom
+            // increases.
             overflow: OverflowChoice::Crop,
         }
     }
@@ -107,9 +101,9 @@ pub enum OverflowChoice {
     /// Sample-window crop with origin centered. Image always visually fills
     /// the terminal viewport; pan with center_x adjusts which portion shows.
     Crop,
-    /// (Default.) Visible region is locked to the image's aspect ratio at every
-    /// zoom level by letterboxing within the canvas. Use this when "the
-    /// diagram's overall ratio should stay the same as I zoom" matters.
+    /// Visible region is locked to the image's aspect ratio at every zoom level
+    /// by letterboxing within the canvas. Use this when "the diagram's overall
+    /// ratio should stay the same as I zoom" matters.
     Letterbox,
     /// Cell rect is allowed to exceed canvas bounds and `clipped_sides` reports
     /// the overflow. c4tui clamps the actual placement before sending to Kitty

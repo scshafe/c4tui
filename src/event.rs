@@ -103,15 +103,6 @@ pub enum ZoomAnchor {
     Canvas { canvas_x: f32, canvas_y: f32 },
 }
 
-impl ZoomAnchor {
-    pub fn coordinates(self) -> (f32, f32) {
-        match self {
-            Self::Center => (0.5, 0.5),
-            Self::Canvas { canvas_x, canvas_y } => (canvas_x, canvas_y),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     Quit,

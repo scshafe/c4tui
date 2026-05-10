@@ -103,7 +103,7 @@ The `+` / `-` step factors and the diagram placement policy are configurable bot
 
 The footer always shows the current values, formatted as `B:fit O:letterbox Z:×1.25`.
 
-Defaults render the diagram fit to the image-box at zoom 1.0 and use canonical magnifier semantics for higher zooms: the image is logically scaled by the zoom factor; the visible region grows until it hits the image-box bounds; once both image-box dimensions are saturated, the source is sample-cropped through the pan center. The "if you could see past the image-box" portion of the logical image is conceptually the part that wasn't sampled.
+Defaults render the diagram fit to the image-box at zoom 1.0 and use magnifier semantics for higher zooms: the image is logically scaled by the zoom factor, the visible region is the intersection of that theoretical image and the image-box bounds, and source pixels are cropped through the pan center.
 
 ```toml
 [zoom]
@@ -119,11 +119,10 @@ scale_basis = "fit"
 
 # What happens when zoom > what the canvas can show. Choices:
 #   "fit_within"          — zoom can't grow past fit
-#   "crop"                — sample window scrolls; image always centered+letterboxed
-#   "crop"                — (default) canonical magnifier: image is logically
-#                           scaled by zoom; visible region grows until it hits
-#                           image-box bounds, then source is sample-cropped
-#                           through the pan center
+#   "crop"                — (default) canonical magnifier: image is logically scaled by
+#                           zoom; visible region grows until it hits image-box
+#                           bounds, then source is sample-cropped through the
+#                           pan center
 #   "letterbox"           — visible region is locked to the image's aspect at
 #                           every zoom level (visible rectangle stops growing
 #                           once one dimension saturates the image aspect)

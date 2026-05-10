@@ -152,7 +152,7 @@ impl AppState {
                 self.zoom_current(store, factor, anchor, canvas)?;
             }
             Command::ResetView => {
-                store.set_transform(self.current, ViewTransform::fit());
+                store.reset_viewport(self.current, canvas)?;
             }
             Command::Pan {
                 dx_fraction,
@@ -199,27 +199,14 @@ impl AppState {
         &self,
         store: &mut ViewStore,
         factor: f32,
-        anchor: ZoomAnchor,
+        _anchor: ZoomAnchor,
         canvas: CanvasMetrics,
     ) -> Result<()> {
-        let raster = store.rendered_view(self.current)?.raster_size;
-        let (anchor_x, anchor_y) = anchor.coordinates();
         let before_transform = store.transform(self.current);
-        let before_placement = crate::view::diagram_placement(
-            before_transform,
-            raster,
-            canvas,
-            store.placement_policy(),
-        );
-        let after_transform =
-            before_transform.zoomed_at(factor, anchor_x, anchor_y, raster, canvas);
-        let after_placement = crate::view::diagram_placement(
-            after_transform,
-            raster,
-            canvas,
-            store.placement_policy(),
-        );
-        store.set_transform(self.current, after_transform);
+        let before_placement = store.placement(self.current, canvas)?;
+        store.zoom_view(self.current, factor, canvas)?;
+        let after_transform = store.transform(self.current);
+        let after_placement = store.placement(self.current, canvas)?;
 
         if let Some(reason) = zoom_no_op_reason(
             factor,
@@ -260,12 +247,7 @@ impl AppState {
         vertical: f32,
         canvas: CanvasMetrics,
     ) -> Result<()> {
-        let raster = store.rendered_view(self.current)?.raster_size;
-        let transform = store
-            .transform(self.current)
-            .panned(horizontal, vertical, raster, canvas);
-        store.set_transform(self.current, transform);
-        Ok(())
+        store.pan_view(self.current, horizontal, vertical, canvas)
     }
 }
 

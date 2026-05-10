@@ -11,6 +11,7 @@ pub struct RenderedView {
     pub natural_size: PixelSize,
     pub raster_size: PixelSize,
     pub png: Vec<u8>,
+    pub rgba: Vec<u8>,
     pub bboxes: Vec<ElementBBox>,
 }
 
@@ -150,12 +151,14 @@ pub fn render_svg(svg_path: &Path, budget: RasterBudget) -> Result<RenderedView>
 
     let transform = tiny_skia::Transform::from_translate(-crop.x, -crop.y).post_scale(scale, scale);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
-    let png = encode_png(pixmap.width(), pixmap.height(), pixmap.data())?;
+    let rgba = pixmap.data().to_vec();
+    let png = encode_png(pixmap.width(), pixmap.height(), &rgba)?;
 
     Ok(RenderedView {
         natural_size: natural,
         raster_size: PixelSize::new(pixmap.width(), pixmap.height()),
         png,
+        rgba,
         bboxes,
     })
 }
