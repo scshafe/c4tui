@@ -391,6 +391,9 @@ fn assign(target: &mut char, value: Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::view::diagram_placement_policy;
+    use tui_kit::config::Validate;
+    use tui_kit::layout::{ImageOverflowPolicy, ImageScaleBasis};
 
     #[test]
     fn loads_config_with_quality_and_keybindings() {
@@ -423,5 +426,76 @@ reload = "R"
         fs::write(&path, "dpi_scale = 1.0\n").unwrap();
         let config = load_config(Some(&path)).unwrap();
         assert!((config.raster_budget.quality - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn loads_placement_choices_into_valid_tui_kit_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            r#"[placement]
+scale_basis = "native"
+overflow = "overflow_cells"
+"#,
+        )
+        .unwrap();
+
+        let config = load_config(Some(&path)).unwrap();
+        assert_eq!(config.placement.scale_basis, ScaleBasisChoice::Native);
+        assert_eq!(config.placement.overflow, OverflowChoice::OverflowCells);
+
+        let policy = diagram_placement_policy(&config.placement);
+        policy.validate().unwrap();
+        assert_eq!(policy.scale_basis, ImageScaleBasis::NativePixels);
+        assert_eq!(
+            policy.overflow,
+            ImageOverflowPolicy::OverflowCellsBeyondArea
+        );
+    }
+
+    #[test]
+    fn every_placement_choice_maps_to_a_valid_tui_kit_policy() {
+        let scale_bases = [
+            (ScaleBasisChoice::Fit, ImageScaleBasis::FitToArea),
+            (ScaleBasisChoice::Native, ImageScaleBasis::NativePixels),
+            (ScaleBasisChoice::Fill, ImageScaleBasis::FillArea),
+        ];
+        let overflows = [
+            (
+                OverflowChoice::FitWithin,
+                ImageOverflowPolicy::FitWithinArea,
+            ),
+            (OverflowChoice::Crop, ImageOverflowPolicy::CropSourceToArea),
+            (
+                OverflowChoice::Letterbox,
+                ImageOverflowPolicy::LetterboxImageAspect,
+            ),
+            (
+                OverflowChoice::OverflowCells,
+                ImageOverflowPolicy::OverflowCellsBeyondArea,
+            ),
+            (
+                OverflowChoice::OverflowSource,
+                ImageOverflowPolicy::OverflowAndClipDestination,
+            ),
+            (
+                OverflowChoice::PreventZoomBeyond,
+                ImageOverflowPolicy::PreventZoomBeyondArea,
+            ),
+        ];
+
+        for (scale_basis, expected_scale_basis) in scale_bases {
+            for (overflow, expected_overflow) in overflows {
+                let policy = diagram_placement_policy(&PlacementChoiceConfig {
+                    scale_basis,
+                    overflow,
+                });
+
+                policy.validate().unwrap();
+                assert_eq!(policy.scale_basis, expected_scale_basis);
+                assert_eq!(policy.overflow, expected_overflow);
+            }
+        }
     }
 }
