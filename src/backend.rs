@@ -1,5 +1,6 @@
 use crate::config::KeyBindings;
 use crate::event::InputEvent;
+use crate::log_view::LogView;
 use crate::picker::ViewPicker;
 use crate::state::RenderFrame;
 use crate::view::ViewStore;
@@ -14,6 +15,7 @@ pub trait TerminalBackend {
     fn render(&mut self, frame: &RenderFrame, store: &mut ViewStore) -> Result<()>;
     fn draw_picker(&mut self, picker: &mut Cached<ViewPicker>, store: &ViewStore) -> Result<()>;
     fn close_picker(&mut self, store: &ViewStore) -> Result<()>;
+    fn draw_log_view(&mut self, log_view: &mut LogView) -> Result<()>;
     fn clear_image_cache(&mut self) -> Result<()>;
     fn show_message(&mut self, title: &str, message: &str) -> Result<()>;
     fn show_error(&mut self, title: &str, message: &str) -> Result<()>;
@@ -34,6 +36,7 @@ pub mod fake {
         pub errors: Vec<(String, String)>,
         pub help_count: usize,
         pub picker_draws: usize,
+        pub log_view_draws: usize,
     }
 
     impl FakeTerminalBackend {
@@ -46,6 +49,7 @@ pub mod fake {
                 errors: Vec::new(),
                 help_count: 0,
                 picker_draws: 0,
+                log_view_draws: 0,
             }
         }
     }
@@ -74,6 +78,11 @@ pub mod fake {
         }
 
         fn close_picker(&mut self, _store: &ViewStore) -> Result<()> {
+            Ok(())
+        }
+
+        fn draw_log_view(&mut self, _log_view: &mut LogView) -> Result<()> {
+            self.log_view_draws += 1;
             Ok(())
         }
 

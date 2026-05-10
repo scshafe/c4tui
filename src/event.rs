@@ -44,6 +44,7 @@ pub enum PendingCommand {
         y: u16,
     },
     EndDrag,
+    ToggleLog,
     Noop,
 }
 
@@ -84,6 +85,7 @@ impl PendingCommand {
             Self::DrillAt { canvas_x, canvas_y } => Command::DrillAt { canvas_x, canvas_y },
             Self::DragTo { x, y } => Command::DragTo { x, y, canvas },
             Self::EndDrag => Command::EndDrag,
+            Self::ToggleLog => Command::ToggleLog,
             Self::Noop => Command::Noop,
         }
     }
@@ -139,6 +141,7 @@ pub enum Command {
         canvas: CanvasMetrics,
     },
     EndDrag,
+    ToggleLog,
     Noop,
 }
 

@@ -44,6 +44,7 @@ impl KeyMapExt for KeyMap {
             PendingCommand::Help,
         );
         map.bind(KeyTrigger::Char('K'), PendingCommand::ShowLegend);
+        map.bind(KeyTrigger::Char('L'), PendingCommand::ToggleLog);
         map.bind(KeyTrigger::Char('i'), PendingCommand::Inspect);
         map.bind(KeyTrigger::Char('I'), PendingCommand::Inspect);
         map.bind(
