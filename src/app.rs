@@ -653,6 +653,38 @@ mod tests {
     }
 
     #[test]
+    fn picker_cancel_pops_tui_kit_focus_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, _rx) = mpsc::channel();
+        let mut app = test_app_with_real_svgs(dir.path(), tx);
+        let mut terminal = FakeTerminalBackend::new();
+
+        run_with_keys(&mut app, &mut terminal, &[Key::Char('o'), Key::Esc]);
+
+        assert_eq!(app.active_scope(), SCOPE_ROOT);
+        assert!(app.picker_slot.is_none());
+        assert!(terminal.picker_draws >= 1);
+    }
+
+    #[test]
+    fn log_view_close_pops_tui_kit_focus_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, _rx) = mpsc::channel();
+        let mut app = test_app_with_real_svgs(dir.path(), tx);
+        let mut terminal = FakeTerminalBackend::new();
+
+        app.toggle_log_view();
+        assert_eq!(app.active_scope(), SCOPE_LOG);
+        assert!(app.log_slot.is_some());
+
+        app.handle_key(Key::Esc, &mut terminal).unwrap();
+
+        assert_eq!(app.active_scope(), SCOPE_ROOT);
+        assert!(app.log_slot.is_none());
+        assert_eq!(terminal.rendered_frames.len(), 1);
+    }
+
+    #[test]
     fn run_handles_hjkl_panning() {
         let dir = tempfile::tempdir().unwrap();
         let (tx, _rx) = mpsc::channel();
