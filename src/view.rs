@@ -246,8 +246,13 @@ fn canvas_to_image(
     let cursor_pixel_y = canvas_y * canvas_pixels.height as f32;
     let origin_pixel_x = f32::from(placement.origin.col) * f32::from(cell_pixel.width);
     let origin_pixel_y = f32::from(placement.origin.row) * f32::from(cell_pixel.height);
-    let target_pixel_w = f32::from(placement.size.cols) * f32::from(cell_pixel.width);
-    let target_pixel_h = f32::from(placement.size.rows) * f32::from(cell_pixel.height);
+    // The terminal layer clamps logical overflow placements to the canvas before
+    // issuing the Kitty command, so hit-testing must use the displayed cell rect
+    // rather than the unclipped logical size reported by tui-kit.
+    let displayed_cols = placement.size.cols.min(canvas.cells.cols);
+    let displayed_rows = placement.size.rows.min(canvas.cells.rows);
+    let target_pixel_w = f32::from(displayed_cols) * f32::from(cell_pixel.width);
+    let target_pixel_h = f32::from(displayed_rows) * f32::from(cell_pixel.height);
     let local_x = (cursor_pixel_x - origin_pixel_x) / target_pixel_w.max(1.0);
     let local_y = (cursor_pixel_y - origin_pixel_y) / target_pixel_h.max(1.0);
     let inside = (0.0..=1.0).contains(&local_x) && (0.0..=1.0).contains(&local_y);
@@ -409,5 +414,34 @@ mod tests {
         assert_eq!(after.effective_scale, before.effective_scale);
         assert!(after.source.x > before.source.x);
         assert!(after.source.y > before.source.y);
+    }
+
+    #[test]
+    fn overflow_cell_hit_testing_uses_clamped_display_rect() {
+        let raster = tui_kit::layout::PixelSize::new(2000, 1000);
+        let canvas = canvas();
+        let policy = diagram_placement_policy(&PlacementChoiceConfig::default());
+        let placement = diagram_placement(
+            ViewTransform::fit().with_scale(2.0),
+            raster,
+            canvas,
+            &policy,
+        );
+
+        assert!(placement.size.cols > canvas.cells.cols);
+        assert!(placement.size.rows > canvas.cells.rows);
+
+        let image_point = canvas_to_image(
+            ViewTransform::fit().with_scale(2.0),
+            0.5,
+            0.5,
+            raster,
+            canvas,
+            &policy,
+        );
+
+        assert!(image_point.inside);
+        assert!((image_point.x - 1000.0).abs() < 1.0, "x={}", image_point.x);
+        assert!((image_point.y - 500.0).abs() < 1.0, "y={}", image_point.y);
     }
 }
