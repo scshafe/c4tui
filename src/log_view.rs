@@ -10,6 +10,7 @@ use crate::clipboard::{Clipboard, CopyOutcome};
 use crate::logger::{LogEntry, SharedLogBuffer};
 use anyhow::Result;
 use tui_kit::input::Key;
+use tui_kit::layout::TailViewport;
 
 /// What the viewer wants the app shell to do after a key.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,18 +73,13 @@ impl LogView {
         let body = body_height.max(1);
         let buf = self.buffer.lock().expect("log buffer poisoned");
         let total = buf.len();
-        let max_scroll = total.saturating_sub(body);
-        if self.scroll_back > max_scroll {
-            self.scroll_back = max_scroll;
-        }
-        // Visible window is the last `body` entries shifted up by scroll_back.
-        let end = total.saturating_sub(self.scroll_back);
-        let start = end.saturating_sub(body);
+        let viewport = TailViewport::new(total, body, self.scroll_back);
+        self.scroll_back = viewport.scroll_back;
         let visible: Vec<LogEntry> = buf
             .entries()
             .iter()
-            .skip(start)
-            .take(end - start)
+            .skip(viewport.start)
+            .take(viewport.end - viewport.start)
             .cloned()
             .collect();
         let new_total = buf.total_pushed;
@@ -93,9 +89,9 @@ impl LogView {
         LogSnapshot {
             visible,
             total,
-            scroll_back: self.scroll_back,
-            can_scroll_up: start > 0,
-            can_scroll_down: self.scroll_back > 0,
+            scroll_back: viewport.scroll_back,
+            can_scroll_up: viewport.can_scroll_up,
+            can_scroll_down: viewport.can_scroll_down,
             new_arrivals_since_last_snapshot: new_arrivals,
         }
     }
@@ -151,25 +147,17 @@ impl LogView {
     fn scroll_by(&mut self, delta_up: isize) {
         let body = self.last_body_height.max(1);
         let total = self.buffer.lock().expect("log buffer poisoned").len();
-        let max_scroll = total.saturating_sub(body);
-        if delta_up > 0 {
-            self.scroll_back = self
-                .scroll_back
-                .saturating_add(delta_up as usize)
-                .min(max_scroll);
-        } else {
-            self.scroll_back = self.scroll_back.saturating_sub((-delta_up) as usize);
-        }
+        self.scroll_back = TailViewport::new(total, body, self.scroll_back).scroll_by(delta_up);
     }
 
     fn scroll_to_top(&mut self) {
         let body = self.last_body_height.max(1);
         let total = self.buffer.lock().expect("log buffer poisoned").len();
-        self.scroll_back = total.saturating_sub(body);
+        self.scroll_back = TailViewport::new(total, body, self.scroll_back).scroll_to_top();
     }
 
     fn scroll_to_bottom(&mut self) {
-        self.scroll_back = 0;
+        self.scroll_back = TailViewport::scroll_to_bottom();
     }
 
     fn yank(&self, range: YankRange, clipboard: &dyn Clipboard) -> String {
@@ -193,9 +181,12 @@ impl LogView {
             YankRange::Visible => {
                 let body = self.last_body_height.max(1);
                 let total = buf.len();
-                let end = total.saturating_sub(self.scroll_back);
-                let start = end.saturating_sub(body);
-                buf.entries().iter().skip(start).take(end - start).collect()
+                let viewport = TailViewport::new(total, body, self.scroll_back);
+                buf.entries()
+                    .iter()
+                    .skip(viewport.start)
+                    .take(viewport.end - viewport.start)
+                    .collect()
             }
         };
         let line_count = entries.len();
