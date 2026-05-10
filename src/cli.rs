@@ -8,11 +8,7 @@ pub struct Cli {
     #[arg(long)]
     pub workspace: Option<PathBuf>,
 
-    /// Path to the structurizr-cli executable.
-    #[arg(long)]
-    pub structurizr_cli: Option<PathBuf>,
-
-    /// Structurizr CLI export format used to produce SVG files.
+    /// Structurizr export format used to produce SVG files.
     #[arg(long, default_value = "svg")]
     pub svg_format: String,
 

@@ -11,7 +11,6 @@ use crate::workspace::{discover_views, export_workspace, load_workspace_model, W
 use anyhow::Result;
 use log::{error, info};
 use std::collections::VecDeque;
-use std::path::PathBuf;
 use std::sync::mpsc::TryRecvError;
 use tui_kit::component::{Cached, Component, ComponentOutcome};
 use tui_kit::events::{
@@ -43,7 +42,6 @@ pub struct App {
     store: ViewStore,
     state: AppState,
     workspace: WorkspaceSource,
-    structurizr_cli: PathBuf,
     svg_format: String,
     config: AppConfig,
     keymap: KeyMap,
@@ -67,7 +65,6 @@ impl App {
     pub fn new(
         store: ViewStore,
         workspace: WorkspaceSource,
-        structurizr_cli: PathBuf,
         svg_format: String,
         config: AppConfig,
         sink: AppEventSender,
@@ -91,7 +88,6 @@ impl App {
             store,
             state: AppState::default(),
             workspace,
-            structurizr_cli,
             svg_format,
             config,
             keymap,
@@ -410,7 +406,7 @@ impl App {
 
     fn reload_store(&mut self) -> Result<()> {
         info!("reloading workspace {}", self.workspace.path.display());
-        let exported = export_workspace(&self.workspace, &self.structurizr_cli, &self.svg_format)?;
+        let exported = export_workspace(&self.workspace, &self.svg_format)?;
         let views = discover_views(&exported)?;
         let model = load_workspace_model(&exported);
         self.store = ViewStore::new(views, self.config.raster_budget)?
@@ -507,7 +503,6 @@ mod tests {
             WorkspaceSource {
                 path: PathBuf::from("workspace.dsl"),
             },
-            PathBuf::from("structurizr-cli"),
             "svg".to_owned(),
             AppConfig::default(),
             sink,

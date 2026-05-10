@@ -152,28 +152,33 @@ pub fn resolve_workspace(input: &Path) -> Result<WorkspaceSource> {
     Ok(WorkspaceSource { path })
 }
 
+/// Binary name of the upstream Structurizr CLI on `PATH`. The legacy tool was
+/// `structurizr-cli`; it has been superseded by the `structurizr` binary
+/// produced by https://github.com/structurizr/structurizr (legacy repo
+/// archived 2026-02-01).
+const STRUCTURIZR_BIN: &str = "structurizr";
+
 pub fn export_workspace(
     workspace: &WorkspaceSource,
-    structurizr_cli: &Path,
     svg_format: &str,
 ) -> Result<ExportedWorkspace> {
     let temp_dir = TempDir::new().context("failed to create temporary export directory")?;
     let output_dir = temp_dir.path().to_path_buf();
 
-    let output = Command::new(structurizr_cli)
+    let output = Command::new(STRUCTURIZR_BIN)
         .arg("export")
-        .arg("-workspace")
+        .arg("--workspace")
         .arg(&workspace.path)
-        .arg("-format")
+        .arg("--format")
         .arg(svg_format)
-        .arg("-output")
+        .arg("--output")
         .arg(&output_dir)
         .output()
-        .with_context(|| format!("failed to run {}", structurizr_cli.display()))?;
+        .with_context(|| format!("failed to run `{STRUCTURIZR_BIN}` (is it on PATH?)"))?;
 
     if !output.status.success() {
         bail!(
-            "structurizr-cli export failed with status {}\n{}{}",
+            "`{STRUCTURIZR_BIN} export` failed with status {}\n{}{}",
             output.status,
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)

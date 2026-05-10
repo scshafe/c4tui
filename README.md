@@ -36,13 +36,12 @@ GitHub Releases include prebuilt archives for macOS arm64, macOS amd64, Linux am
 cargo run -- --workspace ./workspace.dsl
 ```
 
-With `--workspace`, c4tui exports the workspace to SVG with `structurizr-cli`, renders the first exported view inline, opens a view picker with `o`, switches views with Up/Down + Enter, pans with arrow keys or mouse drag, zooms with `+`/`-` or the mouse wheel, resets fit with `0`/`f`, drills into child views by clicking diagram elements, goes back with Backspace, reloads the workspace with `r`, shows help with `?`, and exits with `q`. Without `--workspace`, it only probes terminal capabilities and exits. It returns non-zero when Kitty graphics support is unavailable, because inline image rendering requires it.
+With `--workspace`, c4tui exports the workspace to SVG with the `structurizr` CLI (resolved from `PATH`), renders the first exported view inline, opens a view picker with `o`, switches views with Up/Down + Enter, pans with arrow keys or mouse drag, zooms with `+`/`-` or the mouse wheel, resets fit with `0`/`f`, drills into child views by clicking diagram elements, goes back with Backspace, reloads the workspace with `r`, shows help with `?`, and exits with `q`. Without `--workspace`, it only probes terminal capabilities and exits. It returns non-zero when Kitty graphics support is unavailable, because inline image rendering requires it.
 
 Useful flags:
 
 ```sh
 c4tui --workspace ./workspace.dsl \
-  --structurizr-cli /path/to/structurizr-cli \
   --config ~/.config/c4tui/config.toml \
   --log-file ./c4tui.log
 ```
@@ -87,10 +86,14 @@ Structurizr Lite/Local is an excellent local-first browser for C4 diagrams, but 
 - A terminal that supports the **Kitty graphics protocol** (Kitty, WezTerm, Ghostty)
 - A terminal that supports **SGR pixel mouse mode** (CSI 1016) for click-to-drill
 - True color (24-bit)
-- A reachable `structurizr-cli` binary on `PATH` (used to export views to SVG)
+- A reachable `structurizr` binary on `PATH` (the upstream Structurizr CLI from <https://github.com/structurizr/structurizr>; see notes below)
 - Read access to a Structurizr workspace file
 
 Sixel and iTerm2 inline-image fallbacks are explicitly out of scope for v1.
+
+### Note on the Structurizr CLI
+
+c4tui shells out to `structurizr export --workspace … --format svg --output …`. The legacy `structurizr-cli` (archived 2026-02-01) was superseded by the consolidated `structurizr` tool. **SVG/PNG export in the new tool is rendered through Playwright**, so the build of `structurizr` you install must include the Playwright exporter. Distributions tagged "application" on the upstream releases page bundle it; library-only releases do not.
 
 ## Documents
 

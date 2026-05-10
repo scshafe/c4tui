@@ -26,7 +26,6 @@ use log::info;
 use render::RasterBudget;
 use std::fs::File;
 use std::io::Write;
-use std::path::PathBuf;
 use std::time::Duration;
 use terminal::TerminalSession;
 use view::ViewStore;
@@ -70,17 +69,9 @@ fn run() -> Result<()> {
     }
 
     let workspace = resolve_workspace(cli.workspace.as_deref().expect("checked above"))?;
-    let structurizr_cli = cli
-        .structurizr_cli
-        .unwrap_or_else(|| PathBuf::from("structurizr-cli"));
     let mut terminal = TerminalSession::enter(config.clone())?;
     terminal.set_workspace_path(workspace.path.clone());
-    let view_store = match load_view_store(
-        &workspace,
-        &structurizr_cli,
-        &cli.svg_format,
-        config.raster_budget,
-    ) {
+    let view_store = match load_view_store(&workspace, &cli.svg_format, config.raster_budget) {
         Ok(store) => store,
         Err(error) => {
             terminal.show_error("Startup failed", &format!("{error:#}"))?;
@@ -106,14 +97,7 @@ fn run() -> Result<()> {
         None
     };
     let _watcher = watcher;
-    let mut app = App::new(
-        view_store,
-        workspace,
-        structurizr_cli,
-        cli.svg_format,
-        config,
-        event_tx,
-    );
+    let mut app = App::new(view_store, workspace, cli.svg_format, config, event_tx);
     app.run(&mut terminal, event_rx)?;
 
     Ok(())
@@ -121,11 +105,10 @@ fn run() -> Result<()> {
 
 fn load_view_store(
     workspace: &WorkspaceSource,
-    structurizr_cli: &std::path::Path,
     svg_format: &str,
     budget: RasterBudget,
 ) -> Result<ViewStore> {
-    let exported = export_workspace(workspace, structurizr_cli, svg_format)?;
+    let exported = export_workspace(workspace, svg_format)?;
     let views = discover_views(&exported)?;
     let model = load_workspace_model(&exported);
     ViewStore::new(views, budget).map(|store| store.with_model(model).with_export(exported))
