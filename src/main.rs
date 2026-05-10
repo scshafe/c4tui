@@ -2,10 +2,13 @@ mod app;
 mod backend;
 mod capabilities;
 mod cli;
+mod clipboard;
 mod config;
 mod event;
 mod ids;
 mod keymap;
+mod log_view;
+mod logger;
 mod picker;
 mod render;
 mod render_pool;
@@ -20,12 +23,11 @@ use app::App;
 use capabilities::{detect_capabilities, Support};
 use clap::Parser;
 use cli::Cli;
+use clipboard::DefaultClipboard;
 use config::load_config;
-use env_logger::Env;
 use log::info;
+use logger::SharedLogBuffer;
 use render::RasterBudget;
-use std::fs::File;
-use std::io::Write;
 use std::time::Duration;
 use terminal::TerminalSession;
 use view::ViewStore;
@@ -42,7 +44,7 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
-    init_logging(cli.log_file.as_deref())?;
+    let log_buffer = logger::install(cli.log_file.as_deref())?;
     let config = load_config(cli.config.as_deref())?;
     info!(
         "starting c4tui with raster_quality={}, max_raster_pixels={}",
@@ -97,11 +99,23 @@ fn run() -> Result<()> {
         None
     };
     let _watcher = watcher;
-    let mut app = App::new(view_store, workspace, cli.svg_format, config, event_tx);
+    let clipboard: Box<dyn clipboard::Clipboard> = Box::new(DefaultClipboard);
+    let mut app = App::new(
+        view_store,
+        workspace,
+        cli.svg_format,
+        config,
+        event_tx,
+        log_buffer,
+        clipboard,
+    );
     app.run(&mut terminal, event_rx)?;
 
     Ok(())
 }
+
+#[allow(dead_code)]
+fn _expose_log_buffer_type(_: SharedLogBuffer) {}
 
 fn load_view_store(
     workspace: &WorkspaceSource,
@@ -112,22 +126,4 @@ fn load_view_store(
     let views = discover_views(&exported)?;
     let model = load_workspace_model(&exported);
     ViewStore::new(views, budget).map(|store| store.with_model(model).with_export(exported))
-}
-
-fn init_logging(log_file: Option<&std::path::Path>) -> Result<()> {
-    let env = Env::default().filter_or("RUST_LOG", "warn");
-    let mut builder = env_logger::Builder::from_env(env);
-    builder.format_timestamp_secs();
-    if let Some(path) = log_file {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create log directory {}", parent.display()))?;
-        }
-        let file = File::create(path)
-            .with_context(|| format!("failed to create log file {}", path.display()))?;
-        builder.target(env_logger::Target::Pipe(Box::new(file)));
-    }
-    builder.try_init().ok();
-    std::io::stderr().flush().ok();
-    Ok(())
 }

@@ -1,8 +1,11 @@
 use crate::backend::TerminalBackend;
+use crate::clipboard::Clipboard;
 use crate::config::AppConfig;
 use crate::event::{Command, InputEvent};
 use crate::ids::ViewId;
 use crate::keymap::{KeyMap, KeyMapExt};
+use crate::log_view::{LogView, LogViewOutcome};
+use crate::logger::SharedLogBuffer;
 use crate::picker::{PickerOutcome, ViewPicker};
 use crate::render_pool::{RenderPriority, RenderScheduler};
 use crate::state::{AppState, Effect};
@@ -20,12 +23,13 @@ use tui_kit::events::{
 use tui_kit::focus::{FocusConfig, FocusId, FocusManager, FocusNode, FocusScopeKind};
 use tui_kit::input::Key;
 
-// Modal scope identifiers. c4tui's modes (picker, dialog) push focus scopes
-// with these IDs; routing reads `focus.active_scope_id()` to decide which
-// path handles input or a redraw.
+// Modal scope identifiers. c4tui's modes (picker, dialog, log viewer) push
+// focus scopes with these IDs; routing reads `focus.active_scope_id()` to
+// decide which path handles input or a redraw.
 const SCOPE_ROOT: &str = "root";
 const SCOPE_PICKER: &str = "picker";
 const SCOPE_DIALOG: &str = "dialog";
+const SCOPE_LOG: &str = "log";
 
 #[derive(Debug)]
 struct PickerSlot {
@@ -36,6 +40,11 @@ struct PickerSlot {
 #[derive(Debug)]
 struct DialogSlot {
     dismissable: bool,
+}
+
+#[derive(Debug)]
+struct LogSlot {
+    view: LogView,
 }
 
 pub struct App {
@@ -50,6 +59,9 @@ pub struct App {
     focus: FocusManager,
     picker_slot: Option<PickerSlot>,
     dialog_slot: Option<DialogSlot>,
+    log_slot: Option<LogSlot>,
+    log_buffer: SharedLogBuffer,
+    clipboard: Box<dyn Clipboard>,
 }
 
 impl std::fmt::Debug for App {
@@ -68,6 +80,8 @@ impl App {
         svg_format: String,
         config: AppConfig,
         sink: AppEventSender,
+        log_buffer: SharedLogBuffer,
+        clipboard: Box<dyn Clipboard>,
     ) -> Self {
         let keymap = <KeyMap as KeyMapExt>::defaults(&config.keys);
         let mut scheduler = RenderScheduler::new(std::num::NonZeroUsize::new(1).unwrap(), sink);
@@ -96,6 +110,9 @@ impl App {
             focus,
             picker_slot: None,
             dialog_slot: None,
+            log_slot: None,
+            log_buffer,
+            clipboard,
         }
     }
 
@@ -113,6 +130,26 @@ impl App {
         }
         self.picker_slot = None;
         self.dialog_slot = None;
+        self.log_slot = None;
+    }
+
+    /// Toggle the log viewer scope. Closes if already open; opens otherwise.
+    fn toggle_log_view(&mut self) {
+        if self.log_slot.is_some() {
+            self.return_to_root();
+            return;
+        }
+        self.return_to_root();
+        self.focus
+            .push_scope(
+                SCOPE_LOG,
+                FocusScopeKind::Modal,
+                vec![FocusNode::new("log-pane")],
+            )
+            .expect("log scope is well-formed");
+        self.log_slot = Some(LogSlot {
+            view: LogView::new(self.log_buffer.clone()),
+        });
     }
 
     /// Enter a dismissable dialog scope, replacing any current modal.
@@ -221,6 +258,7 @@ impl App {
     fn handle_key(&mut self, key: Key, terminal: &mut impl TerminalBackend) -> Result<()> {
         match self.active_scope() {
             SCOPE_PICKER => self.handle_key_picker(key, terminal),
+            SCOPE_LOG => self.handle_key_log(key, terminal),
             SCOPE_DIALOG => {
                 if self
                     .dialog_slot
@@ -237,6 +275,28 @@ impl App {
             _ => {
                 let input = terminal.translate_key(key);
                 self.handle_input(input, terminal)
+            }
+        }
+    }
+
+    fn handle_key_log(&mut self, key: Key, terminal: &mut impl TerminalBackend) -> Result<()> {
+        let outcome = {
+            let Some(slot) = self.log_slot.as_mut() else {
+                return Ok(());
+            };
+            slot.view.handle_key(key, self.clipboard.as_ref())?
+        };
+        match outcome {
+            LogViewOutcome::Continue => {
+                if let Some(slot) = self.log_slot.as_mut() {
+                    terminal.draw_log_view(&mut slot.view)?;
+                }
+                Ok(())
+            }
+            LogViewOutcome::Close => {
+                self.return_to_root();
+                terminal.render(&self.frame_with_progress(), &mut self.store)?;
+                Ok(())
             }
         }
     }
@@ -295,6 +355,12 @@ impl App {
             SCOPE_PICKER => {
                 if let Some(slot) = self.picker_slot.as_mut() {
                     terminal.draw_picker(&mut slot.picker, &self.store)?;
+                }
+                Ok(())
+            }
+            SCOPE_LOG => {
+                if let Some(slot) = self.log_slot.as_mut() {
+                    terminal.draw_log_view(&mut slot.view)?;
                 }
                 Ok(())
             }
@@ -372,6 +438,10 @@ impl App {
             Some(Effect::ClearImageCache) => {
                 terminal.clear_image_cache()?;
                 terminal.render(&self.frame_with_progress(), &mut self.store)?;
+            }
+            Some(Effect::ToggleLogView) => {
+                self.toggle_log_view();
+                self.redraw_for_mode(terminal)?;
             }
             Some(Effect::ShowHelp) => {
                 terminal.show_help(&self.config.keys)?;
@@ -498,6 +568,11 @@ mod tests {
             },
         ];
 
+        let log_buffer = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::logger::LogBuffer::with_capacity(64),
+        ));
+        let clipboard: Box<dyn crate::clipboard::Clipboard> =
+            Box::new(crate::clipboard::DefaultClipboard);
         App::new(
             ViewStore::new(views, budget()).unwrap(),
             WorkspaceSource {
@@ -506,6 +581,8 @@ mod tests {
             "svg".to_owned(),
             AppConfig::default(),
             sink,
+            log_buffer,
+            clipboard,
         )
     }
 

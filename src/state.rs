@@ -77,6 +77,10 @@ impl AppState {
                 result.effect = Some(Effect::ShowHelp);
                 result.render = false;
             }
+            Command::ToggleLog => {
+                result.effect = Some(Effect::ToggleLogView);
+                result.render = false;
+            }
             Command::Back => {
                 if let Some(previous) = self.breadcrumbs.pop() {
                     self.current = previous;
@@ -233,6 +237,7 @@ pub enum Effect {
     ReloadWorkspace,
     ClearImageCache,
     ShowHelp,
+    ToggleLogView,
 }
 
 impl Default for UpdateResult {

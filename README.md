@@ -36,7 +36,7 @@ GitHub Releases include prebuilt archives for macOS arm64, macOS amd64, Linux am
 cargo run -- --workspace ./workspace.dsl
 ```
 
-With `--workspace`, c4tui exports the workspace to SVG with the `structurizr` CLI (resolved from `PATH`), renders the first exported view inline, opens a view picker with `o`, switches views with Up/Down + Enter, pans with arrow keys or mouse drag, zooms with `+`/`-` or the mouse wheel, resets fit with `0`/`f`, drills into child views by clicking diagram elements, goes back with Backspace, reloads the workspace with `r`, shows help with `?`, and exits with `q`. Without `--workspace`, it only probes terminal capabilities and exits. It returns non-zero when Kitty graphics support is unavailable, because inline image rendering requires it.
+With `--workspace`, c4tui exports the workspace to SVG with the `structurizr` CLI (resolved from `PATH`), renders the first exported view inline, opens a view picker with `o`, switches views with Up/Down + Enter, pans with arrow keys or mouse drag, zooms with `+`/`-` or the mouse wheel, resets fit with `0`/`f`, drills into child views by clicking diagram elements, goes back with Backspace, reloads the workspace with `r`, shows help with `?`, opens the in-app log viewer with `L`, and exits with `q`. Without `--workspace`, it only probes terminal capabilities and exits. It returns non-zero when Kitty graphics support is unavailable, because inline image rendering requires it.
 
 Useful flags:
 
@@ -46,11 +46,29 @@ c4tui --workspace ./workspace.dsl \
   --log-file ./c4tui.log
 ```
 
-Logging uses `RUST_LOG`, for example:
+### Logs
+
+c4tui never writes log lines to stderr while the alt-screen UI is active, so warnings can't bleed into the diagram. Every log record is buffered in memory (last 1000 entries) and, if `--log-file` is supplied, also tee'd to the file. Filtering is `RUST_LOG` as usual:
 
 ```sh
 RUST_LOG=c4tui=debug c4tui --workspace ./workspace.dsl --log-file ./c4tui.log
 ```
+
+Press **`L`** while running to open the in-app log viewer. Inside the viewer:
+
+| key | action |
+|---|---|
+| `j` / `↓` | scroll down one line |
+| `k` / `↑` | scroll up one line |
+| `g` / `G` | jump to oldest / newest |
+| `y` | yank visible lines to the system clipboard |
+| `Y` | yank the entire buffer |
+| `c` | clear the in-memory buffer |
+| `Esc` / `q` | close the viewer |
+
+### Clipboard
+
+Yank uses a pluggable clipboard backend. The built-in `DefaultClipboard` shells out to `pbcopy` on macOS for text (lands directly in the OS clipboard) and falls back to `/tmp/c4tui-yank.txt` on other platforms. Image yank is currently always a fallback file (`/tmp/c4tui-yank-{epoch}.png`); native image-to-clipboard requires a platform-specific extension and is not in the built-in. The `Clipboard` trait in `src/clipboard.rs` is the seam — a future crate (e.g., `c4tui-clipboard-macos` using `NSPasteboard`) implements it and is swapped in at `App::new` time.
 
 ## Configuration
 
