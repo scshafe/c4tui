@@ -44,7 +44,13 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
-    let log_buffer = logger::install(cli.log_file.as_deref())?;
+    // Always log to a file. If --log-file isn't passed, default to a fixed
+    // path so diagnostics are always captured for the most recent launch.
+    // File::create truncates on open, so each launch starts fresh.
+    let default_log_path = std::path::PathBuf::from("/tmp/c4tui.log");
+    let log_path = cli.log_file.as_deref().unwrap_or(&default_log_path);
+    let log_buffer = logger::install(Some(log_path))?;
+    info!("c4tui session log: {}", log_path.display());
     let config = load_config(cli.config.as_deref())?;
     info!(
         "starting c4tui with raster_quality={}, max_raster_pixels={}",

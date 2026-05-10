@@ -422,9 +422,15 @@ mod tests {
 
     #[test]
     fn overflow_cell_hit_testing_uses_clamped_display_rect() {
+        // Pin the policy explicitly so the test's invariant (cells > canvas)
+        // doesn't drift if the default changes — this test exists to verify
+        // hit-testing under overflow_cells specifically.
         let raster = tui_kit::layout::PixelSize::new(2000, 1000);
         let canvas = canvas();
-        let policy = diagram_placement_policy(&PlacementChoiceConfig::default());
+        let policy = diagram_placement_policy(&PlacementChoiceConfig {
+            scale_basis: crate::config::ScaleBasisChoice::Fit,
+            overflow: crate::config::OverflowChoice::OverflowCells,
+        });
         let placement = diagram_placement(
             ViewTransform::fit().with_scale(2.0),
             raster,

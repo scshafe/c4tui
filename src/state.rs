@@ -204,10 +204,52 @@ impl AppState {
     ) -> Result<()> {
         let raster = store.rendered_view(self.current)?.raster_size;
         let (anchor_x, anchor_y) = anchor.coordinates();
-        let transform = store
-            .transform(self.current)
-            .zoomed_at(factor, anchor_x, anchor_y, raster, canvas);
-        store.set_transform(self.current, transform);
+        let before_transform = store.transform(self.current);
+        let before_placement = crate::view::diagram_placement(
+            before_transform,
+            raster,
+            canvas,
+            store.placement_policy(),
+        );
+        let after_transform =
+            before_transform.zoomed_at(factor, anchor_x, anchor_y, raster, canvas);
+        let after_placement = crate::view::diagram_placement(
+            after_transform,
+            raster,
+            canvas,
+            store.placement_policy(),
+        );
+        store.set_transform(self.current, after_transform);
+
+        if let Some(reason) = zoom_no_op_reason(
+            factor,
+            &before_transform,
+            &after_transform,
+            &before_placement,
+            &after_placement,
+        ) {
+            log::warn!(
+                "zoom factor {factor:.3} produced no visible change: {reason} \
+                 (scale {:.3} -> {:.3}, effective {:.4} -> {:.4}, \
+                 src {}x{}@{},{} -> {}x{}@{},{}, target {}x{} -> {}x{})",
+                before_transform.scale,
+                after_transform.scale,
+                before_placement.effective_scale,
+                after_placement.effective_scale,
+                before_placement.source.width,
+                before_placement.source.height,
+                before_placement.source.x,
+                before_placement.source.y,
+                after_placement.source.width,
+                after_placement.source.height,
+                after_placement.source.x,
+                after_placement.source.y,
+                before_placement.size.cols,
+                before_placement.size.rows,
+                after_placement.size.cols,
+                after_placement.size.rows,
+            );
+        }
         Ok(())
     }
 
@@ -224,6 +266,64 @@ impl AppState {
             .panned(horizontal, vertical, raster, canvas);
         store.set_transform(self.current, transform);
         Ok(())
+    }
+}
+
+/// Classify a zoom call that produced no observable change. Returns the
+/// likely reason as a short string, or `None` if the zoom did change something.
+///
+/// Compares the placements before and after applying the new transform: if the
+/// effective scale, source crop, and target cell rect are all unchanged, the
+/// user will perceive no change at all. The reason string distinguishes the
+/// common causes so the c4tui log can surface specifics.
+fn zoom_no_op_reason(
+    factor: f32,
+    before_transform: &ViewTransform,
+    after_transform: &ViewTransform,
+    before_placement: &tui_kit::layout::Placement,
+    after_placement: &tui_kit::layout::Placement,
+) -> Option<&'static str> {
+    if !before_placement.is_visually_equivalent(after_placement) {
+        return None;
+    }
+    let scale_unchanged = (before_transform.scale - after_transform.scale).abs() < f32::EPSILON;
+
+    if scale_unchanged && factor > 1.0 {
+        Some(
+            "transform.scale was already at MAX_SCALE; tui-kit's clamp_scale \
+             refused to grow it further (try the `Z` key to lower the zoom step \
+             so smaller increments still register)",
+        )
+    } else if scale_unchanged && factor < 1.0 {
+        Some(
+            "transform.scale was already at MIN_SCALE; tui-kit's clamp_scale \
+             refused to shrink it further",
+        )
+    } else if !scale_unchanged && factor > 1.0 {
+        // Scale changed but nothing visible did. The placement engine
+        // constrained the visible region (most likely because the visible
+        // rect already filled the canvas under LetterboxImageAspect, so
+        // further zoom only shrinks the source crop — but if the source crop
+        // also didn't shrink, the zoom_limit policy is at work).
+        Some(
+            "scale advanced but the placement engine produced an identical \
+             placement; the most likely cause is that the visible region is \
+             already at canvas extent under the current overflow policy AND \
+             the source crop did not shrink (i.e., we were already showing \
+             the full image at fit). Try cycling overflow with `O` to one of \
+             the modes that lets cells exceed canvas (overflow_cells / \
+             overflow_source) if you want the image to grow larger than the \
+             terminal viewport.",
+        )
+    } else if !scale_unchanged && factor < 1.0 {
+        Some(
+            "scale advanced down but the placement engine produced an \
+             identical placement; usually means the image was already \
+             smaller than the canvas and the overflow policy is preventing \
+             further shrink",
+        )
+    } else {
+        Some("zoom factor was effectively 1.0 — the call was a true no-op")
     }
 }
 
