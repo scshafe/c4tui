@@ -55,6 +55,9 @@ impl KeyMapExt for KeyMap {
         );
         map.bind(KeyTrigger::Char('K'), PendingCommand::ShowLegend);
         map.bind(KeyTrigger::Char('L'), PendingCommand::ToggleLog);
+        map.bind(KeyTrigger::Char('B'), PendingCommand::CycleScaleBasis);
+        map.bind(KeyTrigger::Char('O'), PendingCommand::CycleOverflow);
+        map.bind(KeyTrigger::Char('Z'), PendingCommand::CycleZoomStep);
         map.bind(KeyTrigger::Char('i'), PendingCommand::Inspect);
         map.bind(KeyTrigger::Char('I'), PendingCommand::Inspect);
         map.bind(

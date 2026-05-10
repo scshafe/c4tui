@@ -307,6 +307,29 @@ pub mod segments {
         }
     }
 
+    /// Footer-side segment that surfaces the runtime placement choice and
+    /// zoom step so the user can see what the `B` / `O` / `Z` cycle keys are
+    /// affecting.
+    #[derive(Debug, Default)]
+    pub struct PlacementSegment;
+
+    impl StatusSegment for PlacementSegment {
+        fn id(&self) -> &'static str {
+            "placement"
+        }
+        fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
+            Some(
+                StatusFragment::new(format!(
+                    "B:{} O:{} Z:×{:.2}",
+                    ctx.config.placement.scale_basis.label(),
+                    ctx.config.placement.overflow.label(),
+                    ctx.config.zoom.in_factor,
+                ))
+                .with_priority(70),
+            )
+        }
+    }
+
     #[derive(Debug, Default)]
     pub struct CenterSegment;
 
@@ -344,6 +367,7 @@ pub fn default_status_bar() -> StatusBar {
 pub fn default_footer_bar() -> StatusBar {
     StatusBar::builder()
         .add(SegmentSlot::Left, segments::HintsSegment)
+        .add(SegmentSlot::Right, segments::PlacementSegment)
         .add(SegmentSlot::Right, segments::WorkspacePathSegment)
         .add(SegmentSlot::Right, segments::RenderProgressSegment)
         .add(SegmentSlot::Right, segments::PinnedElementSegment)

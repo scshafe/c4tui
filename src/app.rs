@@ -9,7 +9,7 @@ use crate::logger::SharedLogBuffer;
 use crate::picker::{PickerOutcome, ViewPicker};
 use crate::render_pool::{RenderPriority, RenderScheduler};
 use crate::state::{AppState, Effect};
-use crate::view::ViewStore;
+use crate::view::{diagram_placement_policy, ViewStore};
 use crate::workspace::{discover_views, export_workspace, load_workspace_model, WorkspaceSource};
 use anyhow::Result;
 use log::{error, info};
@@ -131,6 +131,15 @@ impl App {
         self.picker_slot = None;
         self.dialog_slot = None;
         self.log_slot = None;
+    }
+
+    /// Recompute the placement policy from the current config and store it on
+    /// `ViewStore`. Called after `B` / `O` cycles a placement option.
+    fn apply_placement_change(&mut self) {
+        let policy = diagram_placement_policy(&self.config.placement);
+        // ViewStore exposes a `with_placement_policy` setter on a moved
+        // value; use direct field access via a small helper to avoid moving.
+        self.store.set_placement_policy(policy);
     }
 
     /// Toggle the log viewer scope. Closes if already open; opens otherwise.
@@ -442,6 +451,21 @@ impl App {
             Some(Effect::ToggleLogView) => {
                 self.toggle_log_view();
                 self.redraw_for_mode(terminal)?;
+            }
+            Some(Effect::CycleScaleBasis) => {
+                self.config.placement.scale_basis = self.config.placement.scale_basis.cycle_next();
+                self.apply_placement_change();
+                terminal.render(&self.frame_with_progress(), &mut self.store)?;
+            }
+            Some(Effect::CycleOverflow) => {
+                self.config.placement.overflow = self.config.placement.overflow.cycle_next();
+                self.apply_placement_change();
+                terminal.render(&self.frame_with_progress(), &mut self.store)?;
+            }
+            Some(Effect::CycleZoomStep) => {
+                self.config.zoom = self.config.zoom.cycle_next();
+                self.keymap = <KeyMap as KeyMapExt>::from_app_config(&self.config);
+                terminal.render(&self.frame_with_progress(), &mut self.store)?;
             }
             Some(Effect::ShowHelp) => {
                 terminal.show_help(&self.config.keys)?;

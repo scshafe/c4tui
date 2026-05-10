@@ -59,10 +59,12 @@ impl Default for PlacementChoiceConfig {
     fn default() -> Self {
         Self {
             scale_basis: ScaleBasisChoice::Fit,
-            // Default to "B" — the image's logical cell rect is allowed to
-            // exceed canvas bounds. Pan still works; the consumer (terminal
-            // layer) clamps the cell rect before issuing the Kitty placement.
-            overflow: OverflowChoice::OverflowCells,
+            // Default: lock the visible region to the image's aspect ratio at
+            // every zoom level (letterbox in canvas). Other modes preserve
+            // pixel aspect (a circle stays a circle) but the visible window
+            // takes the canvas's shape — which feels like the diagram's
+            // overall aspect changed when you zoom.
+            overflow: OverflowChoice::Letterbox,
         }
     }
 }
@@ -99,10 +101,14 @@ pub enum OverflowChoice {
     /// Sample-window crop with origin centered. Image always visually fills
     /// the terminal viewport; pan with center_x adjusts which portion shows.
     Crop,
-    /// (Default — "B".) Cell rect is allowed to exceed canvas bounds and
-    /// `clipped_sides` reports the overflow. The terminal layer clamps the
-    /// rect before placing into Kitty so nothing overlaps the status/footer
-    /// bars; pan still works through the source crop.
+    /// (Default.) Visible region is locked to the image's aspect ratio at every
+    /// zoom level by letterboxing within the canvas. Use this when "the
+    /// diagram's overall ratio should stay the same as I zoom" matters.
+    Letterbox,
+    /// Cell rect is allowed to exceed canvas bounds and `clipped_sides` reports
+    /// the overflow. c4tui clamps the actual placement before sending to Kitty
+    /// so the status/footer rows are not overwritten; pan still works through
+    /// the source crop.
     OverflowCells,
     /// Send the full source raster and let the terminal scale-to-fit cells.
     OverflowSource,
@@ -116,9 +122,76 @@ impl OverflowChoice {
         match self {
             Self::FitWithin => ImageOverflowPolicy::FitWithinArea,
             Self::Crop => ImageOverflowPolicy::CropSourceToArea,
+            Self::Letterbox => ImageOverflowPolicy::LetterboxImageAspect,
             Self::OverflowCells => ImageOverflowPolicy::OverflowCellsBeyondArea,
             Self::OverflowSource => ImageOverflowPolicy::OverflowAndClipDestination,
             Self::PreventZoomBeyond => ImageOverflowPolicy::PreventZoomBeyondArea,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::FitWithin => "fit_within",
+            Self::Crop => "crop",
+            Self::Letterbox => "letterbox",
+            Self::OverflowCells => "overflow_cells",
+            Self::OverflowSource => "overflow_source",
+            Self::PreventZoomBeyond => "prevent_zoom_beyond",
+        }
+    }
+
+    /// Cycle through every variant for the in-app `O` toggle.
+    pub fn cycle_next(self) -> Self {
+        match self {
+            Self::FitWithin => Self::Crop,
+            Self::Crop => Self::Letterbox,
+            Self::Letterbox => Self::OverflowCells,
+            Self::OverflowCells => Self::OverflowSource,
+            Self::OverflowSource => Self::PreventZoomBeyond,
+            Self::PreventZoomBeyond => Self::FitWithin,
+        }
+    }
+}
+
+impl ScaleBasisChoice {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Fit => "fit",
+            Self::Native => "native",
+            Self::Fill => "fill",
+        }
+    }
+
+    /// Cycle through every variant for the in-app `B` toggle.
+    pub fn cycle_next(self) -> Self {
+        match self {
+            Self::Fit => Self::Native,
+            Self::Native => Self::Fill,
+            Self::Fill => Self::Fit,
+        }
+    }
+}
+
+impl ZoomConfig {
+    pub const PRESETS: &'static [(f32, f32)] = &[
+        (1.10, 0.909),
+        (1.25, 0.800),
+        (1.50, 0.667),
+        (2.00, 0.500),
+        (3.00, 0.333),
+    ];
+
+    /// Cycle through `PRESETS` for the in-app `Z` toggle.
+    pub fn cycle_next(self) -> Self {
+        let idx = Self::PRESETS
+            .iter()
+            .position(|(in_f, _)| (in_f - self.in_factor).abs() < 0.005)
+            .unwrap_or(0);
+        let next = (idx + 1) % Self::PRESETS.len();
+        let (in_f, out_f) = Self::PRESETS[next];
+        Self {
+            in_factor: in_f,
+            out_factor: out_f,
         }
     }
 }
