@@ -394,8 +394,9 @@ impl App {
                 self.quit = true;
             }
             Some(Effect::OpenPicker) => {
-                let picker_inner =
-                    ViewPicker::new(&self.store.views, &self.store.model, self.state.current());
+                let current = self.state.current();
+                terminal.teardown_image_viewport(current)?;
+                let picker_inner = ViewPicker::new(&self.store.views, &self.store.model, current);
                 let last_hover = picker_inner.selected_view_id();
                 if !self.store.has_rendered(last_hover) {
                     let path = self.store.view(last_hover).svg_path.clone();
@@ -546,7 +547,7 @@ fn coalesce_resize_events(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::fake::FakeTerminalBackend;
+    use crate::backend::fake::{FakeTerminalBackend, FakeTerminalCall};
     use crate::ids::ViewId;
     use crate::render::RasterBudget;
     use crate::workspace::{ViewInfo, WorkspaceSource};
@@ -633,7 +634,45 @@ mod tests {
         );
 
         assert_eq!(app.state.current(), ViewId::new(1));
+        assert_eq!(terminal.viewport_teardowns, vec![ViewId::first()]);
+        assert_eq!(
+            terminal.calls,
+            vec![
+                FakeTerminalCall::Render(ViewId::first()),
+                FakeTerminalCall::TeardownImageViewport(ViewId::first()),
+                FakeTerminalCall::DrawPicker,
+                FakeTerminalCall::DrawPicker,
+                FakeTerminalCall::ClosePicker,
+                FakeTerminalCall::Render(ViewId::new(1)),
+            ]
+        );
         assert!(terminal.picker_draws >= 1);
+    }
+
+    #[test]
+    fn picker_cancel_runs_full_image_lifecycle_back_to_main_view() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, _rx) = mpsc::channel();
+        let mut app = test_app_with_real_svgs(dir.path(), tx);
+        let mut terminal = FakeTerminalBackend::new();
+
+        run_with_keys(
+            &mut app,
+            &mut terminal,
+            &[Key::Char('o'), Key::Esc, Key::Char('q')],
+        );
+
+        assert_eq!(app.state.current(), ViewId::first());
+        assert_eq!(
+            terminal.calls,
+            vec![
+                FakeTerminalCall::Render(ViewId::first()),
+                FakeTerminalCall::TeardownImageViewport(ViewId::first()),
+                FakeTerminalCall::DrawPicker,
+                FakeTerminalCall::ClosePicker,
+                FakeTerminalCall::Render(ViewId::first()),
+            ]
+        );
     }
 
     #[test]

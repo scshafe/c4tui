@@ -148,8 +148,19 @@ impl TerminalSession {
 
     pub fn close_picker(&mut self, store: &ViewStore) -> Result<()> {
         self.inner
-            .images()
-            .delete_placements_in((0..store.views.len()).map(picker_placement_id))?;
+            .teardown_image_viewports((0..store.views.len()).map(|index| {
+                (
+                    image_id_for_view(ViewId::new(index)),
+                    picker_placement_id(index),
+                )
+            }))?;
+        self.inner.images().flush()?;
+        Ok(())
+    }
+
+    pub fn teardown_image_viewport(&mut self, view_id: ViewId) -> Result<()> {
+        self.inner
+            .teardown_image_viewport(image_id_for_view(view_id), MAIN_PLACEMENT_ID)?;
         self.inner.images().flush()?;
         Ok(())
     }
@@ -159,7 +170,6 @@ impl TerminalSession {
         picker: &mut Cached<ViewPicker>,
         store: &ViewStore,
     ) -> Result<()> {
-        self.inner.images().delete_placement(MAIN_PLACEMENT_ID)?;
         let mut render_result: Result<()> = Ok(());
         self.inner.draw(|frame| {
             let area = frame.area();
@@ -168,17 +178,20 @@ impl TerminalSession {
         render_result?;
 
         let thumbs = picker.inner().thumbnails().to_vec();
-        let placements_to_clear: Vec<u32> = (0..store.views.len())
-            .map(picker_placement_id)
-            .filter(|id| {
+        let placements_to_clear: Vec<(u32, u32)> = (0..store.views.len())
+            .map(|index| {
+                (
+                    image_id_for_view(ViewId::new(index)),
+                    picker_placement_id(index),
+                )
+            })
+            .filter(|(_, placement_id)| {
                 !thumbs
                     .iter()
-                    .any(|thumb| picker_placement_id(thumb.view_id.index()) == *id)
+                    .any(|thumb| picker_placement_id(thumb.view_id.index()) == *placement_id)
             })
             .collect();
-        self.inner
-            .images()
-            .delete_placements_in(placements_to_clear)?;
+        self.inner.teardown_image_viewports(placements_to_clear)?;
 
         for thumb in &thumbs {
             self.draw_thumbnail(thumb.view_id, thumb.area, store)?;
@@ -320,6 +333,10 @@ impl TerminalBackend for TerminalSession {
             frame.render_progress,
             store,
         )
+    }
+
+    fn teardown_image_viewport(&mut self, view_id: ViewId) -> Result<()> {
+        Self::teardown_image_viewport(self, view_id)
     }
 
     fn draw_picker(&mut self, picker: &mut Cached<ViewPicker>, store: &ViewStore) -> Result<()> {

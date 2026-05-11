@@ -150,6 +150,22 @@ Structurizr Lite/Local is an excellent local-first browser for C4 diagrams, but 
 
 Sixel and iTerm2 inline-image fallbacks are explicitly out of scope for v1.
 
+## Testing
+
+Automated tests do not enter the alternate screen or emit Kitty/WezTerm image
+escape sequences. App-level tests run through `FakeTerminalBackend`, which
+records render, picker, log, dialog, and image-teardown calls without touching a
+live terminal:
+
+```sh
+cargo test
+cargo clippy --all-targets --all-features
+```
+
+Use a real Kitty-compatible terminal only for explicit manual smoke testing.
+Keep that separate from CI and routine development runs so a renderer or
+terminal regression cannot leave WezTerm in a bad state.
+
 ### Note on the Structurizr CLI
 
 c4tui shells out to `structurizr export --workspace … --format svg --output …`. The legacy `structurizr-cli` (archived 2026-02-01) was superseded by the consolidated `structurizr` tool. **SVG/PNG export in the new tool is rendered through Playwright**, so the build of `structurizr` you install must include the Playwright exporter. Distributions tagged "application" on the upstream releases page bundle it; library-only releases do not.

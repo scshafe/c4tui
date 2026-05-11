@@ -10,6 +10,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use tui_kit::component::{BufferComponent, ComponentId, ComponentOutcome, DirtyReason, DirtyState};
 use tui_kit::input::Key;
 use tui_kit::layout::CellArea;
+use tui_kit::widgets::grid::{Grid, GridStyle};
 
 #[derive(Debug, Clone)]
 pub struct PickerItem {
@@ -385,112 +386,65 @@ impl ViewPicker {
             return;
         }
 
-        let columns = grid_columns(body.width, visible.len());
-        let tile_cols = body.width / columns;
-        let selected_idx = visible
+        let selected_index = visible
             .iter()
             .position(|item| Some(item.view_id) == selected)
-            .unwrap_or(0);
-        let selected_row = selected_idx as u16 / columns;
-        let total_rows = ((visible.len() as u16).saturating_add(columns - 1)) / columns;
-        let total_virtual = total_rows.saturating_mul(TILE_ROWS);
-        let selected_top = selected_row.saturating_mul(TILE_ROWS);
-        let selected_bottom = selected_top.saturating_add(TILE_ROWS);
-        let scroll = if total_virtual <= body.height {
-            0
-        } else if selected_bottom > body.height {
-            selected_bottom.saturating_sub(body.height)
-        } else {
-            0
+            .or(Some(0));
+        let style = GridStyle {
+            selected_cell: Style::default().add_modifier(Modifier::REVERSED),
+            scroll_up: "▲",
+            scroll_down: "▼",
+            ..GridStyle::default()
         };
 
-        for (idx, item) in visible.iter().enumerate() {
-            let grid_col = idx as u16 % columns;
-            let grid_row = idx as u16 / columns;
-            let virtual_y = grid_row.saturating_mul(TILE_ROWS);
-            if virtual_y + TILE_ROWS <= scroll || virtual_y >= scroll + body.height {
-                continue;
-            }
-
-            let tile_x = body.x.saturating_add(grid_col.saturating_mul(tile_cols));
-            let tile_y = body.y.saturating_add(virtual_y.saturating_sub(scroll));
-            if tile_y >= body.y + body.height {
-                continue;
-            }
-
-            let tile_width = if grid_col + 1 == columns {
-                body.width
-                    .saturating_sub(tile_cols.saturating_mul(columns.saturating_sub(1)))
-            } else {
-                tile_cols
-            };
-            if tile_width < 4 {
-                continue;
-            }
-
-            let is_selected = Some(item.view_id) == selected;
-            let style = if is_selected {
-                Style::default().add_modifier(Modifier::REVERSED)
-            } else {
-                Style::default()
-            };
-            let marker = if is_selected { ">" } else { " " };
-            let title = format!("{marker} {}", item.name);
-            buffer.set_string(
-                tile_x,
-                tile_y,
-                truncate(&title, tile_width.saturating_sub(1) as usize),
-                style,
-            );
-
-            let image_y = tile_y.saturating_add(1);
-            if image_y < body.y + body.height {
-                let image_rows = THUMB_ROWS.min((body.y + body.height).saturating_sub(image_y));
-                let image_cols = tile_width.saturating_sub(2);
-                if image_rows > 0 && image_cols > 0 {
-                    let image_x = tile_x.saturating_add(1);
-                    self.last_thumbnails.push(ThumbnailCellArea {
-                        view_id: item.view_id,
-                        area: CellArea::new(image_x, image_y, image_cols, image_rows),
-                    });
+        Grid::new()
+            .with_cell_rows(TILE_ROWS)
+            .with_min_cell_cols(TILE_MIN_COLS)
+            .with_selected_index(selected_index)
+            .with_style(style)
+            .render(body, buffer, visible, |cell, canvas| {
+                if canvas.width() < 4 {
+                    return;
                 }
-            }
 
-            let key_row = tile_y.saturating_add(THUMB_ROWS).saturating_add(1);
-            if key_row < body.y + body.height {
-                buffer.set_string(
-                    tile_x,
-                    key_row,
-                    truncate(&item.key, tile_width.saturating_sub(1) as usize),
-                    Style::default().add_modifier(Modifier::DIM),
+                let item = cell.item;
+                let marker = if cell.selected { ">" } else { " " };
+                let title = format!("{marker} {}", item.name);
+                canvas.set_string(
+                    0,
+                    0,
+                    truncate(&title, canvas.width().saturating_sub(1) as usize),
+                    canvas.style(),
                 );
-            }
-        }
 
-        if scroll > 0 {
-            buffer.set_string(
-                body.x + body.width.saturating_sub(1),
-                body.y,
-                "▲",
-                Style::default(),
-            );
-        }
-        if scroll + body.height < total_virtual {
-            buffer.set_string(
-                body.x + body.width.saturating_sub(1),
-                body.y + body.height.saturating_sub(1),
-                "▼",
-                Style::default(),
-            );
-        }
-    }
-}
+                if canvas.height() > 1 {
+                    let image_rows = THUMB_ROWS.min(canvas.height().saturating_sub(1));
+                    let image_cols = canvas.width().saturating_sub(2);
+                    if image_rows > 0 && image_cols > 0 {
+                        let area = canvas.local_cell_area(1, 1, image_cols, image_rows);
+                        self.last_thumbnails.push(ThumbnailCellArea {
+                            view_id: item.view_id,
+                            area,
+                        });
+                    }
+                }
 
-fn grid_columns(width: u16, items: usize) -> u16 {
-    if items == 0 {
-        return 1;
+                let key_row = THUMB_ROWS.saturating_add(1);
+                if key_row < canvas.height() {
+                    let style = if cell.selected {
+                        canvas.style().add_modifier(Modifier::DIM)
+                    } else {
+                        Style::default().add_modifier(Modifier::DIM)
+                    };
+                    canvas.set_string(
+                        0,
+                        key_row,
+                        truncate(&item.key, canvas.width().saturating_sub(1) as usize),
+                        style,
+                    );
+                }
+            });
     }
-    (width / TILE_MIN_COLS).max(1).min(items as u16)
 }
 
 fn matches_filter(filter: &str, item: &PickerItem) -> bool {
