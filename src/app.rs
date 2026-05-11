@@ -723,6 +723,23 @@ mod tests {
     }
 
     #[test]
+    fn empty_scheduler_completion_does_not_redraw() {
+        let dir = tempfile::tempdir().unwrap();
+        let (scheduler_tx, _scheduler_rx) = mpsc::channel();
+        let mut app = test_app_with_real_svgs(dir.path(), scheduler_tx);
+        let mut terminal = FakeTerminalBackend::new();
+        let (event_tx, event_rx) = mpsc::channel();
+
+        event_tx.send(AppEvent::scheduler_complete()).unwrap();
+        event_tx.send(AppEvent::input_key(Key::CtrlC)).unwrap();
+        drop(event_tx);
+
+        app.run(&mut terminal, event_rx).unwrap();
+
+        assert_eq!(terminal.rendered_frames.len(), 1);
+    }
+
+    #[test]
     fn resize_burst_coalesces_to_single_redraw() {
         let dir = tempfile::tempdir().unwrap();
         let (scheduler_tx, _scheduler_rx) = mpsc::channel();
