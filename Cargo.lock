@@ -1494,7 +1494,7 @@ dependencies = [
 [[package]]
 name = "tui-kit"
 version = "0.1.0"
-source = "git+https://github.com/scshafe/tui-kit?branch=main#5137b30bc0471e51d37d37908ce1fc160e327321"
+source = "git+https://github.com/scshafe/tui-kit?branch=main#c638aa3aefb21a96b103f9e74f10bb4632e3a779"
 dependencies = [
  "anyhow",
  "base64",
