@@ -8,7 +8,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 use tui_kit::component::{BufferComponent, ComponentId, ComponentOutcome, DirtyReason, DirtyState};
-use tui_kit::input::Key;
+use tui_kit::input::KeyEvent;
 use tui_kit::widgets::grid::{Grid, GridStyle};
 
 #[derive(Debug)]
@@ -109,20 +109,20 @@ impl ConnectionPicker {
         }
     }
 
-    pub fn handle_key(&mut self, key: Key) -> ConnectionPickerOutcome {
+    pub fn handle_key(&mut self, key: KeyEvent) -> ConnectionPickerOutcome {
         match key {
-            Key::Esc | Key::CtrlC => ConnectionPickerOutcome::Cancel,
-            Key::Enter => self
+            KeyEvent::Esc | KeyEvent::CtrlC => ConnectionPickerOutcome::Cancel,
+            KeyEvent::Enter => self
                 .selected_candidate()
                 .cloned()
                 .map(ConnectionPickerOutcome::Select)
                 .unwrap_or(ConnectionPickerOutcome::Continue),
-            Key::Up => {
+            KeyEvent::Up => {
                 self.move_selection(-1);
                 self.dirty.mark_paint(DirtyReason::Input);
                 ConnectionPickerOutcome::Continue
             }
-            Key::Down | Key::Tab => {
+            KeyEvent::Down | KeyEvent::Tab => {
                 self.move_selection(1);
                 self.dirty.mark_paint(DirtyReason::Input);
                 ConnectionPickerOutcome::Continue
@@ -184,7 +184,7 @@ impl ConnectionPicker {
 }
 
 impl BufferComponent for ConnectionPicker {
-    type Event = Key;
+    type Event = KeyEvent;
     type Message = ConnectionPickerOutcome;
 
     fn id(&self) -> &ComponentId {
@@ -236,7 +236,7 @@ impl BufferComponent for ConnectionPicker {
         Ok(())
     }
 
-    fn handle_event(&mut self, event: &Key) -> Result<ComponentOutcome<ConnectionPickerOutcome>> {
+    fn handle_event(&mut self, event: &KeyEvent) -> Result<ComponentOutcome<ConnectionPickerOutcome>> {
         let outcome = self.handle_key(*event);
         Ok(match outcome {
             ConnectionPickerOutcome::Continue => ComponentOutcome::Handled,
@@ -494,12 +494,12 @@ mod tests {
         let store = store();
         let mut picker = ConnectionPicker::new(&ElementId::new("api"), candidates(), &store);
 
-        picker.handle_key(Key::Down);
+        picker.handle_key(KeyEvent::Down);
         assert_eq!(picker.selected_view_id(), Some(ViewId::new(2)));
-        picker.handle_key(Key::Down);
+        picker.handle_key(KeyEvent::Down);
         assert_eq!(picker.selected_view_id(), Some(ViewId::new(1)));
 
-        match picker.handle_key(Key::Enter) {
+        match picker.handle_key(KeyEvent::Enter) {
             ConnectionPickerOutcome::Select(candidate) => {
                 assert_eq!(candidate.relationship_id, RelationshipId::new("r1"));
             }
@@ -512,7 +512,7 @@ mod tests {
         let store = store();
         let mut picker = ConnectionPicker::new(&ElementId::new("api"), candidates(), &store);
 
-        assert_eq!(picker.handle_key(Key::Esc), ConnectionPickerOutcome::Cancel);
+        assert_eq!(picker.handle_key(KeyEvent::Esc), ConnectionPickerOutcome::Cancel);
     }
 
     #[test]

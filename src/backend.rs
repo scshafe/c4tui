@@ -1,6 +1,5 @@
 use crate::config::KeyBindings;
 use crate::connection_picker::ConnectionPicker;
-use crate::event::InputEvent;
 use crate::ids::ViewId;
 use crate::log_view::LogView;
 use crate::picker::ViewPicker;
@@ -8,12 +7,10 @@ use crate::state::RenderFrame;
 use crate::view::ViewStore;
 use anyhow::Result;
 use tui_kit::component::Cached;
-use tui_kit::input::Key;
 use tui_kit::layout::CanvasMetrics;
 
 pub trait TerminalBackend {
     fn canvas_metrics(&self) -> CanvasMetrics;
-    fn translate_key(&self, key: Key) -> InputEvent;
     fn render(&mut self, frame: &RenderFrame, store: &mut ViewStore) -> Result<()>;
     fn teardown_image_viewport(&mut self, view_id: ViewId) -> Result<()>;
     fn draw_picker(&mut self, picker: &mut Cached<ViewPicker>, store: &ViewStore) -> Result<()>;
@@ -83,10 +80,6 @@ pub mod fake {
     impl TerminalBackend for FakeTerminalBackend {
         fn canvas_metrics(&self) -> CanvasMetrics {
             self.canvas
-        }
-
-        fn translate_key(&self, key: tui_kit::input::Key) -> InputEvent {
-            InputEvent::from(key)
         }
 
         fn render(&mut self, frame: &RenderFrame, _store: &mut ViewStore) -> Result<()> {

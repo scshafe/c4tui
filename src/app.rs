@@ -2,7 +2,7 @@ use crate::backend::TerminalBackend;
 use crate::clipboard::Clipboard;
 use crate::config::AppConfig;
 use crate::connection_picker::{ConnectionPicker, ConnectionPickerOutcome};
-use crate::event::{Command, InputEvent};
+use crate::event::Command;
 use crate::ids::ViewId;
 use crate::keymap::{KeyMap, KeyMapExt};
 use crate::log_view::{LogView, LogViewOutcome};
@@ -18,11 +18,10 @@ use std::collections::VecDeque;
 use std::sync::mpsc::TryRecvError;
 use tui_kit::component::{Cached, ComponentOutcome};
 use tui_kit::events::{
-    AppEvent, AppEventReceiver, AppEventSender, InputEvent as TuiKitInputEvent, SchedulerEvent,
-    TerminalEvent, WatcherEvent,
+    AppEvent, AppEventReceiver, AppEventSender, SchedulerEvent, TerminalEvent, WatcherEvent,
 };
 use tui_kit::focus::{FocusConfig, FocusId, FocusManager, FocusNode, FocusScopeKind};
-use tui_kit::input::Key;
+use tui_kit::input::{InputEvent, KeyEvent};
 
 // Modal scope identifiers. c4tui's modes (picker, dialog, log viewer) push
 // focus scopes with these IDs; routing reads `focus.active_scope_id()` to
@@ -230,7 +229,7 @@ impl App {
         pending_events: &mut VecDeque<AppEvent>,
     ) -> Result<()> {
         match event {
-            AppEvent::Input(TuiKitInputEvent::Key(key)) => self.handle_key(key, terminal),
+            AppEvent::Input(input) => self.handle_input_event(input, terminal),
             AppEvent::Scheduler(SchedulerEvent::Complete) => {
                 let updated = self.scheduler.drain_into(&mut self.store);
                 if !updated.is_empty() {
@@ -281,7 +280,26 @@ impl App {
         }
     }
 
-    fn handle_key(&mut self, key: Key, terminal: &mut impl TerminalBackend) -> Result<()> {
+    fn handle_input_event(
+        &mut self,
+        input: InputEvent,
+        terminal: &mut impl TerminalBackend,
+    ) -> Result<()> {
+        match input {
+            InputEvent::Key(key) => self.handle_key_event(key, terminal),
+            InputEvent::Mouse(_) | InputEvent::Resize { .. } => {
+                // Modal scopes consume keyboard input only; mouse and resize
+                // events always flow to the root handler.
+                self.handle_input(input, terminal)
+            }
+        }
+    }
+
+    pub(crate) fn handle_key_event(
+        &mut self,
+        key: KeyEvent,
+        terminal: &mut impl TerminalBackend,
+    ) -> Result<()> {
         match self.active_scope() {
             SCOPE_PICKER => self.handle_key_picker(key, terminal),
             SCOPE_CONNECTION_PICKER => self.handle_key_connection_picker(key, terminal),
@@ -299,16 +317,13 @@ impl App {
                 }
                 Ok(())
             }
-            _ => {
-                let input = terminal.translate_key(key);
-                self.handle_input(input, terminal)
-            }
+            _ => self.handle_input(InputEvent::Key(key), terminal),
         }
     }
 
     fn handle_key_connection_picker(
         &mut self,
-        key: Key,
+        key: KeyEvent,
         terminal: &mut impl TerminalBackend,
     ) -> Result<()> {
         let outcome = {
@@ -351,7 +366,7 @@ impl App {
         }
     }
 
-    fn handle_key_log(&mut self, key: Key, terminal: &mut impl TerminalBackend) -> Result<()> {
+    fn handle_key_log(&mut self, key: KeyEvent, terminal: &mut impl TerminalBackend) -> Result<()> {
         let outcome = {
             let Some(slot) = self.log_slot.as_mut() else {
                 return Ok(());
@@ -373,7 +388,7 @@ impl App {
         }
     }
 
-    fn handle_key_picker(&mut self, key: Key, terminal: &mut impl TerminalBackend) -> Result<()> {
+    fn handle_key_picker(&mut self, key: KeyEvent, terminal: &mut impl TerminalBackend) -> Result<()> {
         let outcome = {
             let Some(slot) = self.picker_slot.as_mut() else {
                 return Ok(());
@@ -461,7 +476,7 @@ impl App {
         terminal: &mut impl TerminalBackend,
     ) -> Result<()> {
         let canvas = terminal.canvas_metrics();
-        let pending = self.keymap.resolve(input);
+        let pending = self.keymap.resolve(input, canvas);
         let command = pending.resolve(canvas);
         let update = self.state.apply(command, &mut self.store, canvas)?;
         self.request_active_render();
@@ -692,7 +707,7 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
     use std::sync::mpsc;
-    use tui_kit::input::Key;
+    use tui_kit::input::{InputEvent, KeyEvent, MouseEvent};
 
     fn budget() -> RasterBudget {
         RasterBudget {
@@ -910,7 +925,7 @@ mod tests {
         )
     }
 
-    fn run_with_keys(app: &mut App, terminal: &mut FakeTerminalBackend, keys: &[Key]) {
+    fn run_with_keys(app: &mut App, terminal: &mut FakeTerminalBackend, keys: &[KeyEvent]) {
         let (tx, rx) = mpsc::channel();
         for key in keys {
             tx.send(AppEvent::input_key(*key)).unwrap();
@@ -929,7 +944,7 @@ mod tests {
         run_with_keys(
             &mut app,
             &mut terminal,
-            &[Key::Char('o'), Key::Down, Key::Enter, Key::Char('q')],
+            &[KeyEvent::Char('o'), KeyEvent::Down, KeyEvent::Enter, KeyEvent::Char('q')],
         );
 
         assert_eq!(app.state.current(), ViewId::new(1));
@@ -958,7 +973,7 @@ mod tests {
         run_with_keys(
             &mut app,
             &mut terminal,
-            &[Key::Char('o'), Key::Esc, Key::Char('q')],
+            &[KeyEvent::Char('o'), KeyEvent::Esc, KeyEvent::Char('q')],
         );
 
         assert_eq!(app.state.current(), ViewId::first());
@@ -982,15 +997,12 @@ mod tests {
         let mut terminal = FakeTerminalBackend::new();
 
         app.handle_input(
-            InputEvent::MouseClick {
-                canvas_x: 0.5,
-                canvas_y: 0.5,
-            },
+            InputEvent::Mouse(MouseEvent::Click { x: 41, y: 14 }),
             &mut terminal,
         )
         .unwrap();
-        app.handle_key(Key::Down, &mut terminal).unwrap();
-        app.handle_key(Key::Enter, &mut terminal).unwrap();
+        app.handle_key_event(KeyEvent::Down, &mut terminal).unwrap();
+        app.handle_key_event(KeyEvent::Enter, &mut terminal).unwrap();
 
         assert_eq!(app.state.current(), ViewId::new(2));
         assert_eq!(app.state.render_frame().breadcrumbs, &[ViewId::first()]);
@@ -1014,14 +1026,11 @@ mod tests {
         let mut terminal = FakeTerminalBackend::new();
 
         app.handle_input(
-            InputEvent::MouseClick {
-                canvas_x: 0.5,
-                canvas_y: 0.5,
-            },
+            InputEvent::Mouse(MouseEvent::Click { x: 41, y: 14 }),
             &mut terminal,
         )
         .unwrap();
-        app.handle_key(Key::Esc, &mut terminal).unwrap();
+        app.handle_key_event(KeyEvent::Esc, &mut terminal).unwrap();
 
         assert_eq!(app.state.current(), ViewId::first());
         assert!(app.state.render_frame().breadcrumbs.is_empty());
@@ -1046,7 +1055,7 @@ mod tests {
         run_with_keys(
             &mut app,
             &mut terminal,
-            &[Key::Enter, Key::Enter, Key::Char('q')],
+            &[KeyEvent::Enter, KeyEvent::Enter, KeyEvent::Char('q')],
         );
 
         assert_eq!(app.state.current(), ViewId::new(1));
@@ -1076,7 +1085,7 @@ mod tests {
         run_with_keys(
             &mut app,
             &mut terminal,
-            &[Key::Enter, Key::Esc, Key::Char('q')],
+            &[KeyEvent::Enter, KeyEvent::Esc, KeyEvent::Char('q')],
         );
 
         assert_eq!(app.state.current(), ViewId::first());
@@ -1106,7 +1115,7 @@ mod tests {
         run_with_keys(
             &mut app,
             &mut terminal,
-            &[Key::Enter, Key::Esc, Key::Char('q')],
+            &[KeyEvent::Enter, KeyEvent::Esc, KeyEvent::Char('q')],
         );
 
         assert_eq!(app.state.current(), ViewId::first());
@@ -1133,7 +1142,7 @@ mod tests {
         run_with_keys(
             &mut app,
             &mut terminal,
-            &[Key::Char('?'), Key::Char(' '), Key::Char('q')],
+            &[KeyEvent::Char('?'), KeyEvent::Char(' '), KeyEvent::Char('q')],
         );
 
         assert_eq!(terminal.help_count, 1);
@@ -1149,11 +1158,11 @@ mod tests {
             &mut app,
             &mut terminal,
             &[
-                Key::Char('+'),
-                Key::Char('+'),
-                Key::Char('+'),
-                Key::Char('l'),
-                Key::Char('q'),
+                KeyEvent::Char('+'),
+                KeyEvent::Char('+'),
+                KeyEvent::Char('+'),
+                KeyEvent::Char('l'),
+                KeyEvent::Char('q'),
             ],
         );
         assert!(app.store.transform(ViewId::first()).scale > 1.0);
@@ -1169,7 +1178,7 @@ mod tests {
         let (event_tx, event_rx) = mpsc::channel();
 
         event_tx.send(AppEvent::terminal_resize(120, 40)).unwrap();
-        event_tx.send(AppEvent::input_key(Key::CtrlC)).unwrap();
+        event_tx.send(AppEvent::input_key(KeyEvent::CtrlC)).unwrap();
         drop(event_tx);
 
         app.run(&mut terminal, event_rx).unwrap();
@@ -1188,7 +1197,7 @@ mod tests {
         event_tx.send(AppEvent::terminal_resize(100, 30)).unwrap();
         event_tx.send(AppEvent::terminal_resize(120, 40)).unwrap();
         event_tx.send(AppEvent::terminal_resize(140, 50)).unwrap();
-        event_tx.send(AppEvent::input_key(Key::CtrlC)).unwrap();
+        event_tx.send(AppEvent::input_key(KeyEvent::CtrlC)).unwrap();
         drop(event_tx);
 
         app.run(&mut terminal, event_rx).unwrap();

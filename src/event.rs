@@ -1,16 +1,30 @@
 use crate::ids::ViewId;
 use crate::view::ConnectionNavigationCandidate;
-use tui_kit::input::Key;
+use tui_kit::input::MouseEvent;
 use tui_kit::layout::CanvasMetrics;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum InputEvent {
-    Key(Key),
-    MouseClick { canvas_x: f32, canvas_y: f32 },
-    MouseWheelUp { canvas_x: f32, canvas_y: f32 },
-    MouseWheelDown { canvas_x: f32, canvas_y: f32 },
-    MouseDrag { x: u16, y: u16 },
-    MouseRelease,
+/// Convert a [`MouseEvent`] from terminal-cell coordinates into the c4tui
+/// canvas-fraction coordinate system. `status_rows` excludes the top status
+/// bar from the canvas region. This is the boundary function: tui-kit speaks
+/// cells, c4tui speaks fractions, and the function that crosses the seam
+/// lives here.
+pub fn mouse_to_canvas_fraction(
+    mouse: MouseEvent,
+    canvas: CanvasMetrics,
+    status_rows: u16,
+) -> Option<(f32, f32)> {
+    let (x, y) = match mouse {
+        MouseEvent::Click { x, y }
+        | MouseEvent::Drag { x, y }
+        | MouseEvent::WheelUp { x, y }
+        | MouseEvent::WheelDown { x, y } => (x, y),
+        MouseEvent::Release => return None,
+    };
+    let cols = f32::from(canvas.cells.cols.max(1));
+    let rows = f32::from(canvas.cells.rows.max(1));
+    let canvas_x = f32::from(x.saturating_sub(1)) / cols;
+    let canvas_y = f32::from(y.saturating_sub(1 + status_rows)) / rows;
+    Some((canvas_x.clamp(0.0, 1.0), canvas_y.clamp(0.0, 1.0)))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -151,12 +165,7 @@ pub enum Command {
     Noop,
 }
 
-impl From<Key> for InputEvent {
-    fn from(key: Key) -> Self {
-        match key {
-            Key::MouseDrag { x, y } => Self::MouseDrag { x, y },
-            Key::MouseRelease => Self::MouseRelease,
-            other => Self::Key(other),
-        }
-    }
-}
+// Re-export for downstream modules that want the unified union without
+// reaching through `tui_kit::input::`.
+#[allow(unused_imports)]
+pub use tui_kit::input::InputEvent as TuiKitInputEvent;

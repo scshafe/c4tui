@@ -9,7 +9,7 @@
 use crate::clipboard::{Clipboard, CopyOutcome};
 use crate::logger::{LogEntry, SharedLogBuffer};
 use anyhow::Result;
-use tui_kit::input::Key;
+use tui_kit::input::KeyEvent;
 use tui_kit::layout::TailViewport;
 
 /// What the viewer wants the app shell to do after a key.
@@ -98,38 +98,38 @@ impl LogView {
 
     /// Handle a key press. The clipboard is passed in so the viewer can
     /// implement `y` / `Y` without owning the impl.
-    pub fn handle_key(&mut self, key: Key, clipboard: &dyn Clipboard) -> Result<LogViewOutcome> {
+    pub fn handle_key(&mut self, key: KeyEvent, clipboard: &dyn Clipboard) -> Result<LogViewOutcome> {
         // Any key clears a stale toast.
         self.last_status = None;
         match key {
-            Key::Esc | Key::Char('q') | Key::Char('Q') => Ok(LogViewOutcome::Close),
-            Key::Up | Key::Char('k') => {
+            KeyEvent::Esc | KeyEvent::Char('q') | KeyEvent::Char('Q') => Ok(LogViewOutcome::Close),
+            KeyEvent::Up | KeyEvent::Char('k') => {
                 self.scroll_by(1);
                 Ok(LogViewOutcome::Continue)
             }
-            Key::Down | Key::Char('j') => {
+            KeyEvent::Down | KeyEvent::Char('j') => {
                 self.scroll_by(-1);
                 Ok(LogViewOutcome::Continue)
             }
-            Key::Char('g') => {
+            KeyEvent::Char('g') => {
                 self.scroll_to_top();
                 Ok(LogViewOutcome::Continue)
             }
-            Key::Char('G') => {
+            KeyEvent::Char('G') => {
                 self.scroll_to_bottom();
                 Ok(LogViewOutcome::Continue)
             }
-            Key::Char('y') => {
+            KeyEvent::Char('y') => {
                 let outcome = self.yank(YankRange::Visible, clipboard);
                 self.last_status = Some(outcome);
                 Ok(LogViewOutcome::Continue)
             }
-            Key::Char('Y') => {
+            KeyEvent::Char('Y') => {
                 let outcome = self.yank(YankRange::All, clipboard);
                 self.last_status = Some(outcome);
                 Ok(LogViewOutcome::Continue)
             }
-            Key::Char('c') => {
+            KeyEvent::Char('c') => {
                 let cleared = {
                     let mut buf = self.buffer.lock().expect("log buffer poisoned");
                     let n = buf.len();
@@ -265,9 +265,9 @@ mod tests {
     fn scrolling_up_reveals_older_entries() {
         let mut view = LogView::new(populated_buffer(5));
         view.note_body_height(3);
-        view.handle_key(Key::Up, &RecordingClipboard::default())
+        view.handle_key(KeyEvent::Up, &RecordingClipboard::default())
             .unwrap();
-        view.handle_key(Key::Up, &RecordingClipboard::default())
+        view.handle_key(KeyEvent::Up, &RecordingClipboard::default())
             .unwrap();
         let snap = view.snapshot(3);
         assert_eq!(snap.visible.last().unwrap().message, "line 2");
@@ -279,7 +279,7 @@ mod tests {
         let mut view = LogView::new(populated_buffer(10));
         view.note_body_height(3);
         let cb = RecordingClipboard::default();
-        view.handle_key(Key::Char('y'), &cb).unwrap();
+        view.handle_key(KeyEvent::Char('y'), &cb).unwrap();
         let copied = cb.last_text.lock().unwrap().clone().unwrap();
         let lines: Vec<&str> = copied.lines().collect();
         assert_eq!(lines.len(), 3);
@@ -291,7 +291,7 @@ mod tests {
         let mut view = LogView::new(populated_buffer(10));
         view.note_body_height(3);
         let cb = RecordingClipboard::default();
-        view.handle_key(Key::Char('Y'), &cb).unwrap();
+        view.handle_key(KeyEvent::Char('Y'), &cb).unwrap();
         let copied = cb.last_text.lock().unwrap().clone().unwrap();
         assert_eq!(copied.lines().count(), 10);
     }
@@ -300,7 +300,7 @@ mod tests {
     fn esc_closes_the_view() {
         let mut view = LogView::new(populated_buffer(2));
         let outcome = view
-            .handle_key(Key::Esc, &RecordingClipboard::default())
+            .handle_key(KeyEvent::Esc, &RecordingClipboard::default())
             .unwrap();
         assert_eq!(outcome, LogViewOutcome::Close);
     }
@@ -308,7 +308,7 @@ mod tests {
     #[test]
     fn clear_empties_the_buffer() {
         let mut view = LogView::new(populated_buffer(3));
-        view.handle_key(Key::Char('c'), &RecordingClipboard::default())
+        view.handle_key(KeyEvent::Char('c'), &RecordingClipboard::default())
             .unwrap();
         let snap = view.snapshot(5);
         assert_eq!(snap.visible.len(), 0);
@@ -318,7 +318,7 @@ mod tests {
     fn yank_on_empty_buffer_reports_empty() {
         let mut view = LogView::new(populated_buffer(0));
         let cb = RecordingClipboard::default();
-        view.handle_key(Key::Char('y'), &cb).unwrap();
+        view.handle_key(KeyEvent::Char('y'), &cb).unwrap();
         assert_eq!(cb.copies.load(Ordering::SeqCst), 0);
         assert!(view.last_status().unwrap().contains("empty"));
     }

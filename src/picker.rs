@@ -8,7 +8,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use tui_kit::component::{BufferComponent, ComponentId, ComponentOutcome, DirtyReason, DirtyState};
-use tui_kit::input::Key;
+use tui_kit::input::KeyEvent;
 use tui_kit::layout::CellArea;
 use tui_kit::widgets::grid::{Grid, GridStyle};
 
@@ -115,9 +115,9 @@ impl ViewPicker {
         }
     }
 
-    pub fn handle_key(&mut self, key: Key) -> PickerOutcome {
+    pub fn handle_key(&mut self, key: KeyEvent) -> PickerOutcome {
         match key {
-            Key::Esc => {
+            KeyEvent::Esc => {
                 if self.filter.is_empty() {
                     PickerOutcome::Cancel
                 } else {
@@ -127,8 +127,8 @@ impl ViewPicker {
                     PickerOutcome::Continue
                 }
             }
-            Key::CtrlC => PickerOutcome::Cancel,
-            Key::Enter => {
+            KeyEvent::CtrlC => PickerOutcome::Cancel,
+            KeyEvent::Enter => {
                 let visible = self.visible_view_ids();
                 if let Some(target) = visible
                     .iter()
@@ -142,31 +142,31 @@ impl ViewPicker {
                     PickerOutcome::Continue
                 }
             }
-            Key::Up => {
+            KeyEvent::Up => {
                 self.move_selection(-1);
                 self.dirty.mark_paint(DirtyReason::Input);
                 PickerOutcome::Continue
             }
-            Key::Down => {
+            KeyEvent::Down => {
                 self.move_selection(1);
                 self.dirty.mark_paint(DirtyReason::Input);
                 PickerOutcome::Continue
             }
-            Key::Tab => {
+            KeyEvent::Tab => {
                 self.show_keys = !self.show_keys;
                 self.clamp_selection();
                 self.dirty.mark_paint(DirtyReason::Input);
                 self.dirty.mark_image_placement(DirtyReason::Input);
                 PickerOutcome::Continue
             }
-            Key::Back => {
+            KeyEvent::Back => {
                 self.filter.pop();
                 self.clamp_selection();
                 self.dirty.mark_paint(DirtyReason::Input);
                 self.dirty.mark_image_placement(DirtyReason::Input);
                 PickerOutcome::Continue
             }
-            Key::Char(c) => {
+            KeyEvent::Char(c) => {
                 self.filter.push(c);
                 self.clamp_selection();
                 self.dirty.mark_paint(DirtyReason::Input);
@@ -311,7 +311,7 @@ impl ViewPicker {
 }
 
 impl BufferComponent for ViewPicker {
-    type Event = Key;
+    type Event = KeyEvent;
     type Message = PickerOutcome;
 
     fn id(&self) -> &ComponentId {
@@ -357,7 +357,7 @@ impl BufferComponent for ViewPicker {
         Ok(())
     }
 
-    fn handle_event(&mut self, event: &Key) -> Result<ComponentOutcome<PickerOutcome>> {
+    fn handle_event(&mut self, event: &KeyEvent) -> Result<ComponentOutcome<PickerOutcome>> {
         let outcome = self.handle_key(*event);
         Ok(match outcome {
             PickerOutcome::Continue => ComponentOutcome::Handled,
@@ -604,7 +604,7 @@ mod tests {
     #[test]
     fn tab_toggles_key_visibility() {
         let mut picker = ViewPicker::new(&views(), &WorkspaceModel::default(), ViewId::first());
-        picker.handle_key(Key::Tab);
+        picker.handle_key(KeyEvent::Tab);
         let rendered = picker.render();
         let item_count = rendered
             .lines
@@ -618,7 +618,7 @@ mod tests {
     fn typing_filters_by_subsequence() {
         let mut picker = ViewPicker::new(&views(), &WorkspaceModel::default(), ViewId::first());
         for c in "agnt".chars() {
-            picker.handle_key(Key::Char(c));
+            picker.handle_key(KeyEvent::Char(c));
         }
         let visible = picker.visible_items();
         assert_eq!(visible.len(), 1);
@@ -628,11 +628,11 @@ mod tests {
     #[test]
     fn esc_clears_filter_then_cancels() {
         let mut picker = ViewPicker::new(&views(), &WorkspaceModel::default(), ViewId::first());
-        picker.handle_key(Key::Char('a'));
-        let outcome = picker.handle_key(Key::Esc);
+        picker.handle_key(KeyEvent::Char('a'));
+        let outcome = picker.handle_key(KeyEvent::Esc);
         assert_eq!(outcome, PickerOutcome::Continue);
         assert!(picker.filter.is_empty());
-        let outcome = picker.handle_key(Key::Esc);
+        let outcome = picker.handle_key(KeyEvent::Esc);
         assert_eq!(outcome, PickerOutcome::Cancel);
     }
 
@@ -640,9 +640,9 @@ mod tests {
     fn enter_selects_first_visible_when_current_filtered_out() {
         let mut picker = ViewPicker::new(&views(), &WorkspaceModel::default(), ViewId::first());
         for c in "agen".chars() {
-            picker.handle_key(Key::Char(c));
+            picker.handle_key(KeyEvent::Char(c));
         }
-        let outcome = picker.handle_key(Key::Enter);
+        let outcome = picker.handle_key(KeyEvent::Enter);
         match outcome {
             PickerOutcome::Select(id) => assert_eq!(id, ViewId::new(3)),
             _ => panic!("expected select"),
@@ -658,8 +658,8 @@ mod tests {
             ViewId::new(1),
         );
 
-        picker.handle_key(Key::Down);
-        let outcome = picker.handle_key(Key::Enter);
+        picker.handle_key(KeyEvent::Down);
+        let outcome = picker.handle_key(KeyEvent::Enter);
 
         match outcome {
             PickerOutcome::Select(id) => assert_eq!(id, ViewId::new(3)),
@@ -670,11 +670,11 @@ mod tests {
     #[test]
     fn arrows_cycle_through_visible_items() {
         let mut picker = ViewPicker::new(&views(), &WorkspaceModel::default(), ViewId::first());
-        picker.handle_key(Key::Down);
+        picker.handle_key(KeyEvent::Down);
         assert_eq!(picker.selected_view_id(), ViewId::new(1));
-        picker.handle_key(Key::Down);
+        picker.handle_key(KeyEvent::Down);
         assert_eq!(picker.selected_view_id(), ViewId::new(3));
-        picker.handle_key(Key::Up);
+        picker.handle_key(KeyEvent::Up);
         assert_eq!(picker.selected_view_id(), ViewId::new(1));
     }
 

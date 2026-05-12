@@ -1,7 +1,6 @@
 use crate::backend::TerminalBackend;
 use crate::config::{AppConfig, KeyBindings};
 use crate::connection_picker::ConnectionPicker;
-use crate::event::InputEvent;
 use crate::ids::{ElementId, ViewId};
 use crate::log_view::LogView;
 use crate::picker::ViewPicker;
@@ -15,7 +14,6 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 use tui_kit::component::Cached;
 use tui_kit::image::{picker_placement_id, ImageSurface, MAIN_PLACEMENT_ID};
-use tui_kit::input::Key;
 use tui_kit::layout::{CanvasMetrics, CellArea, CellSize};
 use tui_kit::terminal::TerminalConfig;
 use tui_kit::widgets::dialog::Dialog;
@@ -308,32 +306,6 @@ impl TerminalSession {
         Ok(())
     }
 
-    fn mouse_canvas_point(&self, x: u16, y: u16) -> (f32, f32) {
-        let canvas = self.canvas();
-        let cols = f32::from(canvas.cells.cols.max(1));
-        let rows = f32::from(canvas.cells.rows.max(1));
-        let canvas_x = f32::from(x.saturating_sub(1)) / cols;
-        let canvas_y = f32::from(y.saturating_sub(1 + STATUS_ROWS)) / rows;
-        (canvas_x.clamp(0.0, 1.0), canvas_y.clamp(0.0, 1.0))
-    }
-
-    pub fn translate_key(&self, key: Key) -> InputEvent {
-        match key {
-            Key::MouseClick { x, y } => {
-                let (canvas_x, canvas_y) = self.mouse_canvas_point(x, y);
-                InputEvent::MouseClick { canvas_x, canvas_y }
-            }
-            Key::MouseWheelUp { x, y } => {
-                let (canvas_x, canvas_y) = self.mouse_canvas_point(x, y);
-                InputEvent::MouseWheelUp { canvas_x, canvas_y }
-            }
-            Key::MouseWheelDown { x, y } => {
-                let (canvas_x, canvas_y) = self.mouse_canvas_point(x, y);
-                InputEvent::MouseWheelDown { canvas_x, canvas_y }
-            }
-            other => InputEvent::from(other),
-        }
-    }
 }
 
 fn pinned_connection_counts(
@@ -349,10 +321,6 @@ fn pinned_connection_counts(
 impl TerminalBackend for TerminalSession {
     fn canvas_metrics(&self) -> CanvasMetrics {
         Self::canvas(self)
-    }
-
-    fn translate_key(&self, key: Key) -> InputEvent {
-        Self::translate_key(self, key)
     }
 
     fn render(&mut self, frame: &RenderFrame, store: &mut ViewStore) -> Result<()> {
