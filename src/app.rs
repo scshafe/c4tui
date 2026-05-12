@@ -16,7 +16,7 @@ use anyhow::Result;
 use log::{error, info};
 use std::collections::VecDeque;
 use std::sync::mpsc::TryRecvError;
-use tui_kit::component::{Cached, Component, ComponentOutcome};
+use tui_kit::component::{Cached, ComponentOutcome};
 use tui_kit::events::{
     AppEvent, AppEventReceiver, AppEventSender, InputEvent as TuiKitInputEvent, SchedulerEvent,
     TerminalEvent, WatcherEvent,
