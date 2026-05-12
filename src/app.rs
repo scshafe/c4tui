@@ -16,7 +16,7 @@ use anyhow::Result;
 use log::{error, info};
 use std::collections::VecDeque;
 use std::sync::mpsc::TryRecvError;
-use tui_kit::component::{Cached, Component, ComponentOutcome};
+use tui_kit::component::{BufferComponent, Cached, ComponentOutcome};
 use tui_kit::events::{
     AppEvent, AppEventReceiver, AppEventSender, InputEvent as TuiKitInputEvent, SchedulerEvent,
     TerminalEvent, WatcherEvent,
@@ -315,7 +315,7 @@ impl App {
             let Some(slot) = self.connection_picker_slot.as_mut() else {
                 return Ok(());
             };
-            match slot.picker.handle_event(&key)? {
+            match slot.picker.inner_mut().handle_event(&key)? {
                 ComponentOutcome::Message(m) => m,
                 _ => ConnectionPickerOutcome::Continue,
             }
@@ -378,7 +378,7 @@ impl App {
             let Some(slot) = self.picker_slot.as_mut() else {
                 return Ok(());
             };
-            let outcome = match slot.picker.handle_event(&key)? {
+            let outcome = match slot.picker.inner_mut().handle_event(&key)? {
                 ComponentOutcome::Message(m) => m,
                 _ => PickerOutcome::Continue,
             };
