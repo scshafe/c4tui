@@ -2,12 +2,13 @@ use crate::backend::TerminalBackend;
 use crate::config::{AppConfig, KeyBindings};
 use crate::connection_picker::ConnectionPicker;
 use crate::event::InputEvent;
-use crate::ids::ViewId;
+use crate::ids::{ElementId, ViewId};
 use crate::log_view::LogView;
 use crate::picker::ViewPicker;
 use crate::state::RenderFrame;
 use crate::statusbar::{default_footer_bar, default_status_bar, StatusBar, StatusContext};
 use crate::view::{image_id_for_view, ViewStore};
+use crate::workspace::ConnectionCounts;
 use anyhow::Result;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -92,9 +93,7 @@ impl TerminalSession {
         let pinned_meta = pinned_element
             .and_then(|id| store.element_metadata(id))
             .cloned();
-        let pinned_connection_counts = pinned_element
-            .map(|id| store.connection_candidate_counts_for_element(view_id, id))
-            .filter(|connections| connections.total() > 0);
+        let pinned_connection_counts = pinned_connection_counts(view_id, pinned_element, store);
         let rendered = store.rendered_view(view_id)?;
         let breadcrumb_refs: Vec<&str> = breadcrumb_names.iter().map(String::as_str).collect();
         let workspace_path = self.workspace_path.as_deref();
@@ -337,6 +336,16 @@ impl TerminalSession {
     }
 }
 
+fn pinned_connection_counts(
+    view_id: ViewId,
+    pinned_element: Option<&ElementId>,
+    store: &ViewStore,
+) -> Option<ConnectionCounts> {
+    pinned_element
+        .map(|id| store.connection_candidate_counts_for_element(view_id, id))
+        .filter(|connections| connections.total() > 0)
+}
+
 impl TerminalBackend for TerminalSession {
     fn canvas_metrics(&self) -> CanvasMetrics {
         Self::canvas(self)
@@ -514,5 +523,88 @@ fn truncate(text: &str, max: usize) -> String {
         text.to_owned()
     } else {
         text.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ids::RelationshipId;
+    use crate::render::RasterBudget;
+    use crate::workspace::{RelationshipMetadata, ViewInfo, WorkspaceModel};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    fn view_with_elements(key: &str, elements: &[&str]) -> ViewInfo {
+        ViewInfo {
+            key: key.to_owned(),
+            name: key.to_owned(),
+            kind: crate::workspace::ViewKind::Container,
+            description: None,
+            svg_path: PathBuf::from(format!("{key}.svg")),
+            element_ids: elements.iter().map(|id| ElementId::new(*id)).collect(),
+            child_view_by_element_id: HashMap::new(),
+            primary_view_key: None,
+            key_view_key: None,
+        }
+    }
+
+    fn relationship(id: &str, source: &str, destination: &str) -> RelationshipMetadata {
+        RelationshipMetadata {
+            id: RelationshipId::new(id),
+            source_id: ElementId::new(source),
+            destination_id: ElementId::new(destination),
+            description: None,
+            technology: None,
+            tags: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn pinned_connection_counts_use_navigable_candidates() {
+        let mut model = WorkspaceModel::default();
+        model.relationships.insert(
+            RelationshipId::new("r1"),
+            relationship("r1", "api", "database"),
+        );
+        model.relationships.insert(
+            RelationshipId::new("r2"),
+            relationship("r2", "api", "cache"),
+        );
+        model.relationships.insert(
+            RelationshipId::new("r3"),
+            relationship("r3", "browser", "api"),
+        );
+        model.outgoing_relationships_by_element.insert(
+            ElementId::new("api"),
+            vec![RelationshipId::new("r1"), RelationshipId::new("r2")],
+        );
+        model
+            .incoming_relationships_by_element
+            .insert(ElementId::new("api"), vec![RelationshipId::new("r3")]);
+
+        let store = ViewStore::new(
+            vec![
+                view_with_elements("current", &["api", "database", "cache", "browser"]),
+                view_with_elements("database", &["database"]),
+            ],
+            RasterBudget {
+                quality: 1.0,
+                ..RasterBudget::default()
+            },
+        )
+        .unwrap()
+        .with_model(model);
+
+        let counts =
+            pinned_connection_counts(ViewId::first(), Some(&ElementId::new("api")), &store);
+
+        assert_eq!(
+            counts,
+            Some(ConnectionCounts {
+                outgoing: 1,
+                incoming: 0
+            })
+        );
     }
 }

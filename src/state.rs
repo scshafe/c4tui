@@ -28,10 +28,6 @@ impl AppState {
         self.current
     }
 
-    pub fn pinned_element(&self) -> Option<&ElementId> {
-        self.pinned_element.as_ref()
-    }
-
     pub fn render_frame(&self) -> RenderFrame {
         RenderFrame {
             current: self.current,
@@ -145,22 +141,15 @@ impl AppState {
                 }
             }
             Command::OpenConnectionPicker => {
-                let element = match self.pinned_element.clone() {
+                let source_element_id = match self.pinned_element.clone() {
                     Some(element) => Some(element),
                     None => store.element_at_canvas_point(self.current, 0.5, 0.5, canvas)?,
                 };
-                let Some(element) = element else {
+                let Some(source_element_id) = source_element_id else {
                     result.render = false;
                     return Ok(result);
                 };
-                self.pinned_element = Some(element.clone());
-                if store
-                    .connection_candidates_for_element(self.current, &element)
-                    .is_empty()
-                {
-                    return Ok(result);
-                }
-                result.effect = Some(Effect::OpenConnectionPicker);
+                result.effect = Some(Effect::OpenConnectionPicker { source_element_id });
                 result.render = false;
             }
             Command::SelectConnection(candidate) => {
@@ -349,18 +338,18 @@ pub struct RenderFrame {
     pub render_progress: Option<(usize, usize)>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct UpdateResult {
     pub effect: Option<Effect>,
     pub render: bool,
     pub canvas: CanvasMetrics,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     Quit,
     OpenPicker,
-    OpenConnectionPicker,
+    OpenConnectionPicker { source_element_id: ElementId },
     ReloadWorkspace,
     ClearImageCache,
     ShowHelp,
@@ -557,7 +546,12 @@ mod tests {
             .apply(Command::OpenConnectionPicker, &mut store, canvas())
             .unwrap();
 
-        assert_eq!(update.effect, Some(Effect::OpenConnectionPicker));
+        assert_eq!(
+            update.effect,
+            Some(Effect::OpenConnectionPicker {
+                source_element_id: ElementId::new("api")
+            })
+        );
         assert!(!update.render);
         assert_eq!(state.current(), ViewId::first());
         assert!(state.render_frame().breadcrumbs.is_empty());

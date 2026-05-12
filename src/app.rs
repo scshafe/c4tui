@@ -484,19 +484,11 @@ impl App {
                     terminal.draw_picker(&mut slot.picker, &self.store)?;
                 }
             }
-            Some(Effect::OpenConnectionPicker) => {
+            Some(Effect::OpenConnectionPicker { source_element_id }) => {
                 let current = self.state.current();
-                let Some(element) = self.state.pinned_element().cloned() else {
-                    terminal.render(&self.frame_with_progress(), &mut self.store)?;
-                    return Ok(());
-                };
                 let candidates = self
                     .store
-                    .connection_candidates_for_element(current, &element);
-                if candidates.is_empty() {
-                    terminal.render(&self.frame_with_progress(), &mut self.store)?;
-                    return Ok(());
-                }
+                    .connection_candidates_for_element(current, &source_element_id);
                 terminal.teardown_image_viewport(current)?;
                 let picker_inner = ConnectionPicker::new(candidates, &self.store);
                 self.focus
@@ -903,10 +895,37 @@ mod tests {
         );
 
         assert_eq!(app.state.current(), ViewId::first());
+        assert_eq!(app.state.render_frame().pinned_element, None);
         assert_eq!(
-            app.state.render_frame().pinned_element,
-            Some(ElementId::new("api"))
+            terminal.calls,
+            vec![
+                FakeTerminalCall::Render(ViewId::first()),
+                FakeTerminalCall::TeardownImageViewport(ViewId::first()),
+                FakeTerminalCall::DrawConnectionPicker,
+                FakeTerminalCall::CloseConnectionPicker,
+                FakeTerminalCall::Render(ViewId::first()),
+            ]
         );
+    }
+
+    #[test]
+    fn connection_picker_opens_empty_without_pinning_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, _rx) = mpsc::channel();
+        let mut app = test_app_with_connection_svgs(dir.path(), tx);
+        app.store.model.relationships.clear();
+        app.store.model.outgoing_relationships_by_element.clear();
+        app.store.model.incoming_relationships_by_element.clear();
+        let mut terminal = FakeTerminalBackend::new();
+
+        run_with_keys(
+            &mut app,
+            &mut terminal,
+            &[Key::Enter, Key::Esc, Key::Char('q')],
+        );
+
+        assert_eq!(app.state.current(), ViewId::first());
+        assert_eq!(app.state.render_frame().pinned_element, None);
         assert_eq!(
             terminal.calls,
             vec![
