@@ -236,7 +236,10 @@ impl BufferComponent for ConnectionPicker {
         Ok(())
     }
 
-    fn handle_event(&mut self, event: &KeyEvent) -> Result<ComponentOutcome<ConnectionPickerOutcome>> {
+    fn handle_event(
+        &mut self,
+        event: &KeyEvent,
+    ) -> Result<ComponentOutcome<ConnectionPickerOutcome>> {
         let outcome = self.handle_key(*event);
         Ok(match outcome {
             ConnectionPickerOutcome::Continue => ComponentOutcome::Handled,
@@ -512,7 +515,10 @@ mod tests {
         let store = store();
         let mut picker = ConnectionPicker::new(&ElementId::new("api"), candidates(), &store);
 
-        assert_eq!(picker.handle_key(KeyEvent::Esc), ConnectionPickerOutcome::Cancel);
+        assert_eq!(
+            picker.handle_key(KeyEvent::Esc),
+            ConnectionPickerOutcome::Cancel
+        );
     }
 
     #[test]

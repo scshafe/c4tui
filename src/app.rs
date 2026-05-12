@@ -287,15 +287,23 @@ impl App {
     ) -> Result<()> {
         match input {
             InputEvent::Key(key) => self.handle_key_event(key, terminal),
-            InputEvent::Mouse(_) | InputEvent::Resize { .. } => {
-                // Modal scopes consume keyboard input only; mouse and resize
-                // events always flow to the root handler.
-                self.handle_input(input, terminal)
+            InputEvent::Mouse(_) => {
+                // Modal scopes (picker, connection picker, log, dialog) absorb
+                // mouse events without action — same behaviour as the pre-rename
+                // `_ => Continue` arms in each modal's key handler. Only the
+                // root scope routes mouse input to the root handler where the
+                // keymap converts it into commands.
+                if self.active_scope() == SCOPE_ROOT {
+                    self.handle_input(input, terminal)
+                } else {
+                    Ok(())
+                }
             }
+            InputEvent::Resize { .. } => self.handle_input(input, terminal),
         }
     }
 
-    pub(crate) fn handle_key_event(
+    fn handle_key_event(
         &mut self,
         key: KeyEvent,
         terminal: &mut impl TerminalBackend,
@@ -388,7 +396,11 @@ impl App {
         }
     }
 
-    fn handle_key_picker(&mut self, key: KeyEvent, terminal: &mut impl TerminalBackend) -> Result<()> {
+    fn handle_key_picker(
+        &mut self,
+        key: KeyEvent,
+        terminal: &mut impl TerminalBackend,
+    ) -> Result<()> {
         let outcome = {
             let Some(slot) = self.picker_slot.as_mut() else {
                 return Ok(());
@@ -944,7 +956,12 @@ mod tests {
         run_with_keys(
             &mut app,
             &mut terminal,
-            &[KeyEvent::Char('o'), KeyEvent::Down, KeyEvent::Enter, KeyEvent::Char('q')],
+            &[
+                KeyEvent::Char('o'),
+                KeyEvent::Down,
+                KeyEvent::Enter,
+                KeyEvent::Char('q'),
+            ],
         );
 
         assert_eq!(app.state.current(), ViewId::new(1));
@@ -1002,7 +1019,8 @@ mod tests {
         )
         .unwrap();
         app.handle_key_event(KeyEvent::Down, &mut terminal).unwrap();
-        app.handle_key_event(KeyEvent::Enter, &mut terminal).unwrap();
+        app.handle_key_event(KeyEvent::Enter, &mut terminal)
+            .unwrap();
 
         assert_eq!(app.state.current(), ViewId::new(2));
         assert_eq!(app.state.render_frame().breadcrumbs, &[ViewId::first()]);
@@ -1142,7 +1160,11 @@ mod tests {
         run_with_keys(
             &mut app,
             &mut terminal,
-            &[KeyEvent::Char('?'), KeyEvent::Char(' '), KeyEvent::Char('q')],
+            &[
+                KeyEvent::Char('?'),
+                KeyEvent::Char(' '),
+                KeyEvent::Char('q'),
+            ],
         );
 
         assert_eq!(terminal.help_count, 1);

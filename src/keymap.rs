@@ -2,7 +2,7 @@
 
 use crate::config::{AppConfig, KeyBindings, ZoomConfig};
 use crate::event::{mouse_to_canvas_fraction, PendingCommand};
-use tui_kit::input::{InputEvent, KeyEvent, MouseEvent};
+use tui_kit::input::{InputEvent, MouseEvent};
 use tui_kit::keymap::{KeyMap as KitKeyMap, KeyTrigger, SpecialKey};
 use tui_kit::layout::CanvasMetrics;
 
@@ -139,11 +139,8 @@ impl KeyMapExt for KeyMap {
                 }
             }
             InputEvent::Mouse(MouseEvent::WheelDown { x, y }) => {
-                match mouse_to_canvas_fraction(
-                    MouseEvent::WheelDown { x, y },
-                    canvas,
-                    STATUS_ROWS,
-                ) {
+                match mouse_to_canvas_fraction(MouseEvent::WheelDown { x, y }, canvas, STATUS_ROWS)
+                {
                     Some((canvas_x, canvas_y)) => PendingCommand::ZoomAt {
                         factor: 0.8,
                         canvas_x,
@@ -164,6 +161,7 @@ impl KeyMapExt for KeyMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tui_kit::input::KeyEvent;
     use tui_kit::layout::{CellPixel, CellSize};
 
     fn defaults() -> KeyMap {
@@ -240,10 +238,7 @@ mod tests {
         let map = defaults();
         let canvas = test_canvas();
         assert!(matches!(
-            map.resolve(
-                InputEvent::Mouse(MouseEvent::Click { x: 8, y: 12 }),
-                canvas
-            ),
+            map.resolve(InputEvent::Mouse(MouseEvent::Click { x: 8, y: 12 }), canvas),
             PendingCommand::DrillAt { .. }
         ));
         assert!(matches!(

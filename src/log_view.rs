@@ -98,7 +98,11 @@ impl LogView {
 
     /// Handle a key press. The clipboard is passed in so the viewer can
     /// implement `y` / `Y` without owning the impl.
-    pub fn handle_key(&mut self, key: KeyEvent, clipboard: &dyn Clipboard) -> Result<LogViewOutcome> {
+    pub fn handle_key(
+        &mut self,
+        key: KeyEvent,
+        clipboard: &dyn Clipboard,
+    ) -> Result<LogViewOutcome> {
         // Any key clears a stale toast.
         self.last_status = None;
         match key {

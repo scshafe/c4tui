@@ -305,7 +305,6 @@ impl TerminalSession {
         self.inner.images().flush()?;
         Ok(())
     }
-
 }
 
 fn pinned_connection_counts(
