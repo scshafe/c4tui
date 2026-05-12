@@ -28,6 +28,7 @@ pub struct WorkspaceModel {
 }
 
 impl WorkspaceModel {
+    #[cfg(test)]
     pub fn connection_counts(&self, element_id: &ElementId) -> ConnectionCounts {
         ConnectionCounts {
             outgoing: self.outgoing_relationships(element_id).count(),

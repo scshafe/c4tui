@@ -4,6 +4,7 @@ mod capabilities;
 mod cli;
 mod clipboard;
 mod config;
+mod connection_picker;
 mod event;
 mod ids;
 mod keymap;

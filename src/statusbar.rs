@@ -186,7 +186,7 @@ pub mod segments {
             let keys = &ctx.config.keys;
             Some(
                 StatusFragment::new(format!(
-                    "{}/hjkl pan  +/- zoom  Enter link  {} reset  {} pick  {} reload  ? help  {} quit",
+                    "{}/hjkl pan  +/- zoom  Enter links  {} reset  {} pick  {} reload  ? help  {} quit",
                     arrows_glyph(),
                     keys.reset,
                     keys.open_picker,

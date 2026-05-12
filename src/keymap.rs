@@ -60,7 +60,7 @@ impl KeyMapExt for KeyMap {
         map.bind(KeyTrigger::Char('Z'), PendingCommand::CycleZoomStep);
         map.bind(
             KeyTrigger::Special(SpecialKey::Enter),
-            PendingCommand::FollowConnection,
+            PendingCommand::OpenConnectionPicker,
         );
         map.bind(KeyTrigger::Char('i'), PendingCommand::Inspect);
         map.bind(KeyTrigger::Char('I'), PendingCommand::Inspect);
@@ -157,12 +157,12 @@ mod tests {
     }
 
     #[test]
-    fn enter_follows_connection() {
+    fn enter_opens_connection_picker() {
         let map = defaults();
 
         assert!(matches!(
             map.lookup(Key::Enter),
-            Some(PendingCommand::FollowConnection)
+            Some(PendingCommand::OpenConnectionPicker)
         ));
     }
 

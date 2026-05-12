@@ -1,6 +1,7 @@
 use crate::backend::TerminalBackend;
 use crate::clipboard::Clipboard;
 use crate::config::AppConfig;
+use crate::connection_picker::{ConnectionPicker, ConnectionPickerOutcome};
 use crate::event::{Command, InputEvent};
 use crate::ids::ViewId;
 use crate::keymap::{KeyMap, KeyMapExt};
@@ -28,6 +29,7 @@ use tui_kit::input::Key;
 // decide which path handles input or a redraw.
 const SCOPE_ROOT: &str = "root";
 const SCOPE_PICKER: &str = "picker";
+const SCOPE_CONNECTION_PICKER: &str = "connection-picker";
 const SCOPE_DIALOG: &str = "dialog";
 const SCOPE_LOG: &str = "log";
 
@@ -40,6 +42,11 @@ struct PickerSlot {
 #[derive(Debug)]
 struct DialogSlot {
     dismissable: bool,
+}
+
+#[derive(Debug)]
+struct ConnectionPickerSlot {
+    picker: Cached<ConnectionPicker>,
 }
 
 #[derive(Debug)]
@@ -58,6 +65,7 @@ pub struct App {
     quit: bool,
     focus: FocusManager,
     picker_slot: Option<PickerSlot>,
+    connection_picker_slot: Option<ConnectionPickerSlot>,
     dialog_slot: Option<DialogSlot>,
     log_slot: Option<LogSlot>,
     log_buffer: SharedLogBuffer,
@@ -109,6 +117,7 @@ impl App {
             quit: false,
             focus,
             picker_slot: None,
+            connection_picker_slot: None,
             dialog_slot: None,
             log_slot: None,
             log_buffer,
@@ -129,6 +138,7 @@ impl App {
             self.focus.pop_scope();
         }
         self.picker_slot = None;
+        self.connection_picker_slot = None;
         self.dialog_slot = None;
         self.log_slot = None;
     }
@@ -267,6 +277,7 @@ impl App {
     fn handle_key(&mut self, key: Key, terminal: &mut impl TerminalBackend) -> Result<()> {
         match self.active_scope() {
             SCOPE_PICKER => self.handle_key_picker(key, terminal),
+            SCOPE_CONNECTION_PICKER => self.handle_key_connection_picker(key, terminal),
             SCOPE_LOG => self.handle_key_log(key, terminal),
             SCOPE_DIALOG => {
                 if self
@@ -284,6 +295,51 @@ impl App {
             _ => {
                 let input = terminal.translate_key(key);
                 self.handle_input(input, terminal)
+            }
+        }
+    }
+
+    fn handle_key_connection_picker(
+        &mut self,
+        key: Key,
+        terminal: &mut impl TerminalBackend,
+    ) -> Result<()> {
+        let outcome = {
+            let Some(slot) = self.connection_picker_slot.as_mut() else {
+                return Ok(());
+            };
+            match slot.picker.handle_event(&key)? {
+                ComponentOutcome::Message(m) => m,
+                _ => ConnectionPickerOutcome::Continue,
+            }
+        };
+        match outcome {
+            ConnectionPickerOutcome::Continue => {
+                if let Some(slot) = self.connection_picker_slot.as_mut() {
+                    terminal.draw_connection_picker(&mut slot.picker)?;
+                }
+                Ok(())
+            }
+            ConnectionPickerOutcome::Select(candidate) => {
+                terminal.close_connection_picker()?;
+                self.connection_picker_slot = None;
+                self.focus.pop_scope();
+                let canvas = terminal.canvas_metrics();
+                self.state.apply(
+                    Command::SelectConnection(candidate),
+                    &mut self.store,
+                    canvas,
+                )?;
+                self.request_active_render();
+                terminal.render(&self.frame_with_progress(), &mut self.store)?;
+                Ok(())
+            }
+            ConnectionPickerOutcome::Cancel => {
+                terminal.close_connection_picker()?;
+                self.connection_picker_slot = None;
+                self.focus.pop_scope();
+                terminal.render(&self.frame_with_progress(), &mut self.store)?;
+                Ok(())
             }
         }
     }
@@ -367,6 +423,12 @@ impl App {
                 }
                 Ok(())
             }
+            SCOPE_CONNECTION_PICKER => {
+                if let Some(slot) = self.connection_picker_slot.as_mut() {
+                    terminal.draw_connection_picker(&mut slot.picker)?;
+                }
+                Ok(())
+            }
             SCOPE_LOG => {
                 if let Some(slot) = self.log_slot.as_mut() {
                     terminal.draw_log_view(&mut slot.view)?;
@@ -420,6 +482,35 @@ impl App {
                 });
                 if let Some(slot) = self.picker_slot.as_mut() {
                     terminal.draw_picker(&mut slot.picker, &self.store)?;
+                }
+            }
+            Some(Effect::OpenConnectionPicker) => {
+                let current = self.state.current();
+                let Some(element) = self.state.pinned_element().cloned() else {
+                    terminal.render(&self.frame_with_progress(), &mut self.store)?;
+                    return Ok(());
+                };
+                let candidates = self
+                    .store
+                    .connection_candidates_for_element(current, &element);
+                if candidates.is_empty() {
+                    terminal.render(&self.frame_with_progress(), &mut self.store)?;
+                    return Ok(());
+                }
+                terminal.teardown_image_viewport(current)?;
+                let picker_inner = ConnectionPicker::new(candidates, &self.store);
+                self.focus
+                    .push_scope(
+                        SCOPE_CONNECTION_PICKER,
+                        FocusScopeKind::Modal,
+                        vec![FocusNode::new("connection-picker-list")],
+                    )
+                    .expect("connection picker scope is well-formed");
+                self.connection_picker_slot = Some(ConnectionPickerSlot {
+                    picker: Cached::new(picker_inner),
+                });
+                if let Some(slot) = self.connection_picker_slot.as_mut() {
+                    terminal.draw_connection_picker(&mut slot.picker)?;
                 }
             }
             Some(Effect::ReloadWorkspace) => {
@@ -548,9 +639,12 @@ fn coalesce_resize_events(
 mod tests {
     use super::*;
     use crate::backend::fake::{FakeTerminalBackend, FakeTerminalCall};
-    use crate::ids::ViewId;
+    use crate::ids::{ElementId, RelationshipId, ViewId};
     use crate::render::RasterBudget;
-    use crate::workspace::{ViewInfo, WorkspaceSource};
+    use crate::workspace::{
+        ElementKind, ElementMetadata, RelationshipMetadata, ViewInfo, WorkspaceModel,
+        WorkspaceSource,
+    };
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
     use std::sync::mpsc;
@@ -600,6 +694,96 @@ mod tests {
             Box::new(crate::clipboard::DefaultClipboard);
         App::new(
             ViewStore::new(views, budget()).unwrap(),
+            WorkspaceSource {
+                path: PathBuf::from("workspace.dsl"),
+            },
+            "svg".to_owned(),
+            AppConfig::default(),
+            sink,
+            log_buffer,
+            clipboard,
+        )
+    }
+
+    fn test_app_with_connection_svgs(dir: &std::path::Path, sink: AppEventSender) -> App {
+        let api_svg = dir.join("api.svg");
+        let database_svg = dir.join("database.svg");
+        std::fs::write(
+            &api_svg,
+            r#"<svg width="100" height="100"><g id="api"><rect x="10" y="10" width="80" height="80"/></g></svg>"#,
+        )
+        .unwrap();
+        std::fs::write(&database_svg, r#"<svg width="100" height="100"/>"#).unwrap();
+
+        let views = vec![
+            ViewInfo {
+                key: "api".to_owned(),
+                name: "API".to_owned(),
+                kind: crate::workspace::ViewKind::Container,
+                description: None,
+                svg_path: api_svg,
+                element_ids: HashSet::from([ElementId::new("api")]),
+                child_view_by_element_id: HashMap::new(),
+                primary_view_key: None,
+                key_view_key: None,
+            },
+            ViewInfo {
+                key: "database".to_owned(),
+                name: "Database".to_owned(),
+                kind: crate::workspace::ViewKind::Component,
+                description: None,
+                svg_path: database_svg,
+                element_ids: HashSet::from([ElementId::new("database")]),
+                child_view_by_element_id: HashMap::new(),
+                primary_view_key: None,
+                key_view_key: None,
+            },
+        ];
+        let mut model = WorkspaceModel::default();
+        model.elements.insert(
+            ElementId::new("api"),
+            ElementMetadata {
+                id: ElementId::new("api"),
+                name: "API".to_owned(),
+                description: None,
+                technology: None,
+                tags: Vec::new(),
+                kind: ElementKind::Container,
+            },
+        );
+        model.elements.insert(
+            ElementId::new("database"),
+            ElementMetadata {
+                id: ElementId::new("database"),
+                name: "Database".to_owned(),
+                description: None,
+                technology: Some("PostgreSQL".to_owned()),
+                tags: Vec::new(),
+                kind: ElementKind::Container,
+            },
+        );
+        let relationship = RelationshipMetadata {
+            id: RelationshipId::new("r1"),
+            source_id: ElementId::new("api"),
+            destination_id: ElementId::new("database"),
+            description: Some("Reads from".to_owned()),
+            technology: None,
+            tags: Vec::new(),
+        };
+        model
+            .outgoing_relationships_by_element
+            .insert(ElementId::new("api"), vec![relationship.id.clone()]);
+        model
+            .relationships
+            .insert(relationship.id.clone(), relationship);
+
+        let log_buffer = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::logger::LogBuffer::with_capacity(64),
+        ));
+        let clipboard: Box<dyn crate::clipboard::Clipboard> =
+            Box::new(crate::clipboard::DefaultClipboard);
+        App::new(
+            ViewStore::new(views, budget()).unwrap().with_model(model),
             WorkspaceSource {
                 path: PathBuf::from("workspace.dsl"),
             },
@@ -670,6 +854,66 @@ mod tests {
                 FakeTerminalCall::TeardownImageViewport(ViewId::first()),
                 FakeTerminalCall::DrawPicker,
                 FakeTerminalCall::ClosePicker,
+                FakeTerminalCall::Render(ViewId::first()),
+            ]
+        );
+    }
+
+    #[test]
+    fn connection_picker_selects_connection_by_keystrokes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, _rx) = mpsc::channel();
+        let mut app = test_app_with_connection_svgs(dir.path(), tx);
+        let mut terminal = FakeTerminalBackend::new();
+
+        run_with_keys(
+            &mut app,
+            &mut terminal,
+            &[Key::Enter, Key::Enter, Key::Char('q')],
+        );
+
+        assert_eq!(app.state.current(), ViewId::new(1));
+        assert_eq!(
+            app.state.render_frame().pinned_element,
+            Some(ElementId::new("database"))
+        );
+        assert_eq!(
+            terminal.calls,
+            vec![
+                FakeTerminalCall::Render(ViewId::first()),
+                FakeTerminalCall::TeardownImageViewport(ViewId::first()),
+                FakeTerminalCall::DrawConnectionPicker,
+                FakeTerminalCall::CloseConnectionPicker,
+                FakeTerminalCall::Render(ViewId::new(1)),
+            ]
+        );
+    }
+
+    #[test]
+    fn connection_picker_cancel_returns_to_current_view() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, _rx) = mpsc::channel();
+        let mut app = test_app_with_connection_svgs(dir.path(), tx);
+        let mut terminal = FakeTerminalBackend::new();
+
+        run_with_keys(
+            &mut app,
+            &mut terminal,
+            &[Key::Enter, Key::Esc, Key::Char('q')],
+        );
+
+        assert_eq!(app.state.current(), ViewId::first());
+        assert_eq!(
+            app.state.render_frame().pinned_element,
+            Some(ElementId::new("api"))
+        );
+        assert_eq!(
+            terminal.calls,
+            vec![
+                FakeTerminalCall::Render(ViewId::first()),
+                FakeTerminalCall::TeardownImageViewport(ViewId::first()),
+                FakeTerminalCall::DrawConnectionPicker,
+                FakeTerminalCall::CloseConnectionPicker,
                 FakeTerminalCall::Render(ViewId::first()),
             ]
         );

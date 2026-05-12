@@ -1,6 +1,6 @@
 use crate::event::{Command, ZoomAnchor};
 use crate::ids::{ElementId, ViewId};
-use crate::view::ViewStore;
+use crate::view::{ConnectionNavigationCandidate, ViewStore};
 use anyhow::Result;
 use tui_kit::layout::{CanvasMetrics, ViewTransform};
 
@@ -26,6 +26,10 @@ impl Default for AppState {
 impl AppState {
     pub const fn current(&self) -> ViewId {
         self.current
+    }
+
+    pub fn pinned_element(&self) -> Option<&ElementId> {
+        self.pinned_element.as_ref()
     }
 
     pub fn render_frame(&self) -> RenderFrame {
@@ -140,7 +144,7 @@ impl AppState {
                     result.render = false;
                 }
             }
-            Command::FollowConnection => {
+            Command::OpenConnectionPicker => {
                 let element = match self.pinned_element.clone() {
                     Some(element) => Some(element),
                     None => store.element_at_canvas_point(self.current, 0.5, 0.5, canvas)?,
@@ -149,18 +153,18 @@ impl AppState {
                     result.render = false;
                     return Ok(result);
                 };
-                let Some(candidate) = store
+                self.pinned_element = Some(element.clone());
+                if store
                     .connection_candidates_for_element(self.current, &element)
-                    .into_iter()
-                    .next()
-                else {
-                    self.pinned_element = Some(element);
+                    .is_empty()
+                {
                     return Ok(result);
-                };
-                self.breadcrumbs.push(self.current);
-                self.current = candidate.view_id;
-                self.last_drag = None;
-                self.pinned_element = Some(candidate.connected_element_id);
+                }
+                result.effect = Some(Effect::OpenConnectionPicker);
+                result.render = false;
+            }
+            Command::SelectConnection(candidate) => {
+                self.navigate_connection(candidate);
             }
             Command::ClearOrQuit => {
                 if self.pinned_element.is_some() {
@@ -208,6 +212,13 @@ impl AppState {
         }
 
         Ok(result)
+    }
+
+    fn navigate_connection(&mut self, candidate: ConnectionNavigationCandidate) {
+        self.breadcrumbs.push(self.current);
+        self.current = candidate.view_id;
+        self.last_drag = None;
+        self.pinned_element = Some(candidate.connected_element_id);
     }
 
     fn reset_navigation(&mut self) {
@@ -349,6 +360,7 @@ pub struct UpdateResult {
 pub enum Effect {
     Quit,
     OpenPicker,
+    OpenConnectionPicker,
     ReloadWorkspace,
     ClearImageCache,
     ShowHelp,
@@ -534,15 +546,39 @@ mod tests {
     }
 
     #[test]
-    fn follow_connection_uses_pinned_element_and_sets_connected_element() {
+    fn open_connection_picker_uses_pinned_element_without_navigating() {
         let mut store = connection_store();
         let mut state = AppState {
             pinned_element: Some(ElementId::new("api")),
             ..Default::default()
         };
 
+        let update = state
+            .apply(Command::OpenConnectionPicker, &mut store, canvas())
+            .unwrap();
+
+        assert_eq!(update.effect, Some(Effect::OpenConnectionPicker));
+        assert!(!update.render);
+        assert_eq!(state.current(), ViewId::first());
+        assert!(state.render_frame().breadcrumbs.is_empty());
+        assert_eq!(
+            state.render_frame().pinned_element,
+            Some(ElementId::new("api"))
+        );
+    }
+
+    #[test]
+    fn select_connection_navigates_and_sets_connected_element() {
+        let mut store = connection_store();
+        let mut state = AppState::default();
+        let candidate = store
+            .connection_candidates_for_element(ViewId::first(), &ElementId::new("api"))
+            .into_iter()
+            .next()
+            .unwrap();
+
         state
-            .apply(Command::FollowConnection, &mut store, canvas())
+            .apply(Command::SelectConnection(candidate), &mut store, canvas())
             .unwrap();
 
         assert_eq!(state.current(), ViewId::new(1));

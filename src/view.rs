@@ -1,7 +1,9 @@
 use crate::config::PlacementChoiceConfig;
 use crate::ids::{ElementId, RelationshipId, ViewId};
 use crate::render::{render_svg, RasterBudget, RenderedView};
-use crate::workspace::{ElementMetadata, ExportedWorkspace, ViewInfo, WorkspaceModel};
+use crate::workspace::{
+    ConnectionCounts, ElementMetadata, ExportedWorkspace, ViewInfo, WorkspaceModel,
+};
 use anyhow::{anyhow, bail, Result};
 use std::collections::HashMap;
 use tui_kit::layout::{
@@ -121,6 +123,22 @@ impl ViewStore {
             });
 
         outgoing.chain(incoming).collect()
+    }
+
+    pub fn connection_candidate_counts_for_element(
+        &self,
+        current: ViewId,
+        element_id: &ElementId,
+    ) -> ConnectionCounts {
+        self.connection_candidates_for_element(current, element_id)
+            .into_iter()
+            .fold(ConnectionCounts::default(), |mut counts, candidate| {
+                match candidate.direction {
+                    ConnectionDirection::Outgoing => counts.outgoing += 1,
+                    ConnectionDirection::Incoming => counts.incoming += 1,
+                }
+                counts
+            })
     }
 
     fn candidate_views_for_element(&self, current: ViewId, element_id: &ElementId) -> Vec<ViewId> {
@@ -602,9 +620,14 @@ mod tests {
             RelationshipId::new("r2"),
             relationship("r2", "browser", "api"),
         );
-        model
-            .outgoing_relationships_by_element
-            .insert(ElementId::new("api"), vec![RelationshipId::new("r1")]);
+        model.relationships.insert(
+            RelationshipId::new("r3"),
+            relationship("r3", "api", "cache"),
+        );
+        model.outgoing_relationships_by_element.insert(
+            ElementId::new("api"),
+            vec![RelationshipId::new("r1"), RelationshipId::new("r3")],
+        );
         model
             .incoming_relationships_by_element
             .insert(ElementId::new("api"), vec![RelationshipId::new("r2")]);
@@ -656,6 +679,13 @@ mod tests {
                     view_id: ViewId::new(2),
                 },
             ]
+        );
+        assert_eq!(
+            store.connection_candidate_counts_for_element(ViewId::first(), &ElementId::new("api")),
+            ConnectionCounts {
+                outgoing: 1,
+                incoming: 1
+            }
         );
     }
 

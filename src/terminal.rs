@@ -1,5 +1,6 @@
 use crate::backend::TerminalBackend;
 use crate::config::{AppConfig, KeyBindings};
+use crate::connection_picker::ConnectionPicker;
 use crate::event::InputEvent;
 use crate::ids::ViewId;
 use crate::log_view::LogView;
@@ -92,7 +93,7 @@ impl TerminalSession {
             .and_then(|id| store.element_metadata(id))
             .cloned();
         let pinned_connection_counts = pinned_element
-            .map(|id| store.model.connection_counts(id))
+            .map(|id| store.connection_candidate_counts_for_element(view_id, id))
             .filter(|connections| connections.total() > 0);
         let rendered = store.rendered_view(view_id)?;
         let breadcrumb_refs: Vec<&str> = breadcrumb_names.iter().map(String::as_str).collect();
@@ -162,6 +163,11 @@ impl TerminalSession {
         Ok(())
     }
 
+    pub fn close_connection_picker(&mut self) -> Result<()> {
+        self.inner.images().flush()?;
+        Ok(())
+    }
+
     pub fn teardown_image_viewport(&mut self, view_id: ViewId) -> Result<()> {
         self.inner
             .teardown_image_viewport(image_id_for_view(view_id), MAIN_PLACEMENT_ID)?;
@@ -200,6 +206,18 @@ impl TerminalSession {
         for thumb in &thumbs {
             self.draw_thumbnail(thumb.view_id, thumb.area, store)?;
         }
+        self.inner.images().flush()?;
+        Ok(())
+    }
+
+    pub fn draw_connection_picker(&mut self, picker: &mut Cached<ConnectionPicker>) -> Result<()> {
+        self.inner.images().delete_placement(MAIN_PLACEMENT_ID)?;
+        let mut render_result: Result<()> = Ok(());
+        self.inner.draw(|frame| {
+            let area = frame.area();
+            render_result = picker.render_to_buffer(area, frame.buffer_mut());
+        })?;
+        render_result?;
         self.inner.images().flush()?;
         Ok(())
     }
@@ -245,7 +263,7 @@ impl TerminalSession {
 
     pub fn help_text(keys: &KeyBindings) -> String {
         format!(
-            "Keys\n\n  {quit}  Quit\n  Esc  Clear pinned element / quit if none\n  {open}  Open view picker (type to filter, Tab toggles legends)\n  {reload}  Reload workspace/export\n  K  Jump to legend for current view\n  i  Inspect element at viewport center\n  Enter  Follow first connection from pinned/center element\n  Backspace  Go back through breadcrumbs\n  Arrows or hjkl  Pan\n  {zoom_in}/=  Zoom in\n  {zoom_out}/_  Zoom out\n  {reset} or {fit}  Reset/fit view\n  Mouse wheel  Zoom around cursor\n  Mouse drag  Pan\n  Click element  Drill into child view, else pin\n\nConfig: ~/.config/c4tui/config.toml\nLogging: --log-file <path>, level via RUST_LOG",
+            "Keys\n\n  {quit}  Quit\n  Esc  Clear pinned element / quit if none\n  {open}  Open view picker (type to filter, Tab toggles legends)\n  {reload}  Reload workspace/export\n  K  Jump to legend for current view\n  i  Inspect element at viewport center\n  Enter  Open connection picker for pinned/center element\n  Backspace  Go back through breadcrumbs\n  Arrows or hjkl  Pan\n  {zoom_in}/=  Zoom in\n  {zoom_out}/_  Zoom out\n  {reset} or {fit}  Reset/fit view\n  Mouse wheel  Zoom around cursor\n  Mouse drag  Pan\n  Click element  Drill into child view, else pin\n\nConfig: ~/.config/c4tui/config.toml\nLogging: --log-file <path>, level via RUST_LOG",
             quit = keys.quit,
             open = keys.open_picker,
             reload = keys.reload,
@@ -349,6 +367,14 @@ impl TerminalBackend for TerminalSession {
 
     fn close_picker(&mut self, store: &ViewStore) -> Result<()> {
         Self::close_picker(self, store)
+    }
+
+    fn draw_connection_picker(&mut self, picker: &mut Cached<ConnectionPicker>) -> Result<()> {
+        Self::draw_connection_picker(self, picker)
+    }
+
+    fn close_connection_picker(&mut self) -> Result<()> {
+        Self::close_connection_picker(self)
     }
 
     fn draw_log_view(&mut self, log_view: &mut LogView) -> Result<()> {

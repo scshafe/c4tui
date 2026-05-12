@@ -1,4 +1,5 @@
 use crate::config::KeyBindings;
+use crate::connection_picker::ConnectionPicker;
 use crate::event::InputEvent;
 use crate::ids::ViewId;
 use crate::log_view::LogView;
@@ -17,6 +18,8 @@ pub trait TerminalBackend {
     fn teardown_image_viewport(&mut self, view_id: ViewId) -> Result<()>;
     fn draw_picker(&mut self, picker: &mut Cached<ViewPicker>, store: &ViewStore) -> Result<()>;
     fn close_picker(&mut self, store: &ViewStore) -> Result<()>;
+    fn draw_connection_picker(&mut self, picker: &mut Cached<ConnectionPicker>) -> Result<()>;
+    fn close_connection_picker(&mut self) -> Result<()>;
     fn draw_log_view(&mut self, log_view: &mut LogView) -> Result<()>;
     fn clear_image_cache(&mut self) -> Result<()>;
     fn show_message(&mut self, title: &str, message: &str) -> Result<()>;
@@ -35,6 +38,8 @@ pub mod fake {
         TeardownImageViewport(ViewId),
         DrawPicker,
         ClosePicker,
+        DrawConnectionPicker,
+        CloseConnectionPicker,
         DrawLogView,
         ClearImageCache,
         ShowMessage,
@@ -53,6 +58,7 @@ pub mod fake {
         pub help_count: usize,
         pub viewport_teardowns: Vec<ViewId>,
         pub picker_draws: usize,
+        pub connection_picker_draws: usize,
         pub log_view_draws: usize,
     }
 
@@ -68,6 +74,7 @@ pub mod fake {
                 help_count: 0,
                 viewport_teardowns: Vec::new(),
                 picker_draws: 0,
+                connection_picker_draws: 0,
                 log_view_draws: 0,
             }
         }
@@ -107,6 +114,17 @@ pub mod fake {
 
         fn close_picker(&mut self, _store: &ViewStore) -> Result<()> {
             self.calls.push(FakeTerminalCall::ClosePicker);
+            Ok(())
+        }
+
+        fn draw_connection_picker(&mut self, _picker: &mut Cached<ConnectionPicker>) -> Result<()> {
+            self.calls.push(FakeTerminalCall::DrawConnectionPicker);
+            self.connection_picker_draws += 1;
+            Ok(())
+        }
+
+        fn close_connection_picker(&mut self) -> Result<()> {
+            self.calls.push(FakeTerminalCall::CloseConnectionPicker);
             Ok(())
         }
 

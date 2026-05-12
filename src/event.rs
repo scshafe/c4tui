@@ -1,4 +1,5 @@
 use crate::ids::ViewId;
+use crate::view::ConnectionNavigationCandidate;
 use tui_kit::input::Key;
 use tui_kit::layout::CanvasMetrics;
 
@@ -21,7 +22,7 @@ pub enum PendingCommand {
     Back,
     ShowLegend,
     Inspect,
-    FollowConnection,
+    OpenConnectionPicker,
     ClearOrQuit,
     Pan {
         dx_fraction: f32,
@@ -65,7 +66,7 @@ impl PendingCommand {
                 canvas_x: 0.5,
                 canvas_y: 0.5,
             },
-            Self::FollowConnection => Command::FollowConnection,
+            Self::OpenConnectionPicker => Command::OpenConnectionPicker,
             Self::ClearOrQuit => Command::ClearOrQuit,
             Self::Pan {
                 dx_fraction,
@@ -116,11 +117,12 @@ pub enum Command {
     Help,
     Back,
     ShowLegend,
+    OpenConnectionPicker,
+    SelectConnection(ConnectionNavigationCandidate),
     InspectAt {
         canvas_x: f32,
         canvas_y: f32,
     },
-    FollowConnection,
     ClearOrQuit,
     DrillAt {
         canvas_x: f32,
