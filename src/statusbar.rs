@@ -3,7 +3,7 @@
 use crate::config::AppConfig;
 use crate::ids::ViewId;
 use crate::render::RenderedView;
-use crate::workspace::{ElementMetadata, ViewInfo};
+use crate::workspace::{ConnectionCounts, ElementMetadata, ViewInfo};
 use tui_kit::layout::{CanvasMetrics, Placement, ViewTransform};
 
 // Re-export tui-kit's data types so c4tui shares the wire format with the
@@ -23,6 +23,7 @@ pub struct StatusContext<'a> {
     pub rendered: &'a RenderedView,
     pub config: &'a AppConfig,
     pub pinned_element: Option<&'a ElementMetadata>,
+    pub pinned_element_connections: Option<ConnectionCounts>,
     pub render_progress: Option<(usize, usize)>,
     pub workspace_path: Option<&'a std::path::Path>,
 }
@@ -185,7 +186,7 @@ pub mod segments {
             let keys = &ctx.config.keys;
             Some(
                 StatusFragment::new(format!(
-                    "{}/hjkl pan  +/- zoom  {} reset  {} pick  {} reload  ? help  {} quit",
+                    "{}/hjkl pan  +/- zoom  Enter link  {} reset  {} pick  {} reload  ? help  {} quit",
                     arrows_glyph(),
                     keys.reset,
                     keys.open_picker,
@@ -305,6 +306,14 @@ pub mod segments {
             let mut text = format!("→ {} [{}]", pinned.name, pinned.kind.label());
             if let Some(tech) = &pinned.technology {
                 text.push_str(&format!(" ({tech})"));
+            }
+            if let Some(connections) = ctx.pinned_element_connections {
+                if connections.total() > 0 {
+                    text.push_str(&format!(
+                        " · {} out / {} in",
+                        connections.outgoing, connections.incoming
+                    ));
+                }
             }
             if let Some(desc) = &pinned.description {
                 text.push_str(" — ");
@@ -430,6 +439,7 @@ mod tests {
             rendered,
             config,
             pinned_element: None,
+            pinned_element_connections: None,
             render_progress: None,
             workspace_path: None,
         }
@@ -489,5 +499,31 @@ mod tests {
         let bar = StatusBar::builder().add(SegmentSlot::Right, Marker).build();
         let line = bar.render(&ctx, 30);
         assert!(line.ends_with("MARKER"));
+    }
+
+    #[test]
+    fn pinned_element_segment_includes_connection_counts() {
+        let rendered = rendered();
+        let view = view();
+        let config = AppConfig::default();
+        let pinned = ElementMetadata {
+            id: crate::ids::ElementId::new("1"),
+            name: "API".to_owned(),
+            description: None,
+            technology: None,
+            tags: Vec::new(),
+            kind: crate::workspace::ElementKind::Container,
+        };
+        let mut ctx = ctx(&rendered, &view, &config);
+        ctx.pinned_element = Some(&pinned);
+        ctx.pinned_element_connections = Some(ConnectionCounts {
+            outgoing: 2,
+            incoming: 1,
+        });
+
+        let fragment = PinnedElementSegment.render(&ctx).unwrap();
+
+        assert!(fragment.text.contains("API"));
+        assert!(fragment.text.contains("2 out / 1 in"));
     }
 }

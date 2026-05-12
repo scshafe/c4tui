@@ -91,6 +91,9 @@ impl TerminalSession {
         let pinned_meta = pinned_element
             .and_then(|id| store.element_metadata(id))
             .cloned();
+        let pinned_connection_counts = pinned_element
+            .map(|id| store.model.connection_counts(id))
+            .filter(|connections| connections.total() > 0);
         let rendered = store.rendered_view(view_id)?;
         let breadcrumb_refs: Vec<&str> = breadcrumb_names.iter().map(String::as_str).collect();
         let workspace_path = self.workspace_path.as_deref();
@@ -104,6 +107,7 @@ impl TerminalSession {
             rendered,
             config: &self.config,
             pinned_element: pinned_meta.as_ref(),
+            pinned_element_connections: pinned_connection_counts,
             render_progress,
             workspace_path,
         };
@@ -241,7 +245,7 @@ impl TerminalSession {
 
     pub fn help_text(keys: &KeyBindings) -> String {
         format!(
-            "Keys\n\n  {quit}  Quit\n  Esc  Clear pinned element / quit if none\n  {open}  Open view picker (type to filter, Tab toggles legends)\n  {reload}  Reload workspace/export\n  K  Jump to legend for current view\n  i  Inspect element at viewport center\n  Backspace  Go back through breadcrumbs\n  Arrows or hjkl  Pan\n  {zoom_in}/=  Zoom in\n  {zoom_out}/_  Zoom out\n  {reset} or {fit}  Reset/fit view\n  Mouse wheel  Zoom around cursor\n  Mouse drag  Pan\n  Click element  Drill into child view, else pin\n\nConfig: ~/.config/c4tui/config.toml\nLogging: --log-file <path>, level via RUST_LOG",
+            "Keys\n\n  {quit}  Quit\n  Esc  Clear pinned element / quit if none\n  {open}  Open view picker (type to filter, Tab toggles legends)\n  {reload}  Reload workspace/export\n  K  Jump to legend for current view\n  i  Inspect element at viewport center\n  Enter  Follow first connection from pinned/center element\n  Backspace  Go back through breadcrumbs\n  Arrows or hjkl  Pan\n  {zoom_in}/=  Zoom in\n  {zoom_out}/_  Zoom out\n  {reset} or {fit}  Reset/fit view\n  Mouse wheel  Zoom around cursor\n  Mouse drag  Pan\n  Click element  Drill into child view, else pin\n\nConfig: ~/.config/c4tui/config.toml\nLogging: --log-file <path>, level via RUST_LOG",
             quit = keys.quit,
             open = keys.open_picker,
             reload = keys.reload,

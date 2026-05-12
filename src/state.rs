@@ -140,6 +140,28 @@ impl AppState {
                     result.render = false;
                 }
             }
+            Command::FollowConnection => {
+                let element = match self.pinned_element.clone() {
+                    Some(element) => Some(element),
+                    None => store.element_at_canvas_point(self.current, 0.5, 0.5, canvas)?,
+                };
+                let Some(element) = element else {
+                    result.render = false;
+                    return Ok(result);
+                };
+                let Some(candidate) = store
+                    .connection_candidates_for_element(self.current, &element)
+                    .into_iter()
+                    .next()
+                else {
+                    self.pinned_element = Some(element);
+                    return Ok(result);
+                };
+                self.breadcrumbs.push(self.current);
+                self.current = candidate.view_id;
+                self.last_drag = None;
+                self.pinned_element = Some(candidate.connected_element_id);
+            }
             Command::ClearOrQuit => {
                 if self.pinned_element.is_some() {
                     self.pinned_element = None;
@@ -352,9 +374,9 @@ impl Default for UpdateResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ids::ElementId;
+    use crate::ids::{ElementId, RelationshipId};
     use crate::render::RasterBudget;
-    use crate::workspace::ViewInfo;
+    use crate::workspace::{RelationshipMetadata, ViewInfo, WorkspaceModel};
     use std::collections::{HashMap, HashSet};
     use std::fs;
     use tui_kit::layout::{CellPixel, CellSize};
@@ -421,6 +443,50 @@ mod tests {
         .unwrap()
     }
 
+    fn connection_store() -> ViewStore {
+        let views = vec![
+            ViewInfo {
+                key: "api".to_owned(),
+                name: "API".to_owned(),
+                kind: crate::workspace::ViewKind::Container,
+                description: None,
+                svg_path: std::path::PathBuf::from("api.svg"),
+                element_ids: HashSet::from([ElementId::new("api")]),
+                child_view_by_element_id: HashMap::new(),
+                primary_view_key: None,
+                key_view_key: None,
+            },
+            ViewInfo {
+                key: "database".to_owned(),
+                name: "Database".to_owned(),
+                kind: crate::workspace::ViewKind::Component,
+                description: None,
+                svg_path: std::path::PathBuf::from("database.svg"),
+                element_ids: HashSet::from([ElementId::new("database")]),
+                child_view_by_element_id: HashMap::new(),
+                primary_view_key: None,
+                key_view_key: None,
+            },
+        ];
+        let relationship = RelationshipMetadata {
+            id: RelationshipId::new("r1"),
+            source_id: ElementId::new("api"),
+            destination_id: ElementId::new("database"),
+            description: Some("Reads from".to_owned()),
+            technology: None,
+            tags: Vec::new(),
+        };
+        let mut model = WorkspaceModel::default();
+        model
+            .outgoing_relationships_by_element
+            .insert(ElementId::new("api"), vec![relationship.id.clone()]);
+        model
+            .relationships
+            .insert(relationship.id.clone(), relationship);
+
+        ViewStore::new(views, budget()).unwrap().with_model(model)
+    }
+
     #[test]
     fn select_view_clears_breadcrumbs() {
         let mut store = test_store();
@@ -465,6 +531,26 @@ mod tests {
         state.apply(Command::Back, &mut store, canvas()).unwrap();
         assert_eq!(state.current(), ViewId::first());
         assert!(state.render_frame().breadcrumbs.is_empty());
+    }
+
+    #[test]
+    fn follow_connection_uses_pinned_element_and_sets_connected_element() {
+        let mut store = connection_store();
+        let mut state = AppState {
+            pinned_element: Some(ElementId::new("api")),
+            ..Default::default()
+        };
+
+        state
+            .apply(Command::FollowConnection, &mut store, canvas())
+            .unwrap();
+
+        assert_eq!(state.current(), ViewId::new(1));
+        assert_eq!(state.render_frame().breadcrumbs, &[ViewId::first()]);
+        assert_eq!(
+            state.render_frame().pinned_element,
+            Some(ElementId::new("database"))
+        );
     }
 
     #[test]

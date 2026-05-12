@@ -1,4 +1,4 @@
-use crate::ids::ElementId;
+use crate::ids::{ElementId, RelationshipId};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
@@ -22,6 +22,40 @@ pub struct ExportedWorkspace {
 #[derive(Debug, Clone, Default)]
 pub struct WorkspaceModel {
     pub elements: HashMap<ElementId, ElementMetadata>,
+    pub relationships: HashMap<RelationshipId, RelationshipMetadata>,
+    pub outgoing_relationships_by_element: HashMap<ElementId, Vec<RelationshipId>>,
+    pub incoming_relationships_by_element: HashMap<ElementId, Vec<RelationshipId>>,
+}
+
+impl WorkspaceModel {
+    pub fn connection_counts(&self, element_id: &ElementId) -> ConnectionCounts {
+        ConnectionCounts {
+            outgoing: self.outgoing_relationships(element_id).count(),
+            incoming: self.incoming_relationships(element_id).count(),
+        }
+    }
+
+    pub fn outgoing_relationships(
+        &self,
+        element_id: &ElementId,
+    ) -> impl Iterator<Item = &RelationshipMetadata> {
+        self.outgoing_relationships_by_element
+            .get(element_id)
+            .into_iter()
+            .flatten()
+            .filter_map(|relationship_id| self.relationships.get(relationship_id))
+    }
+
+    pub fn incoming_relationships(
+        &self,
+        element_id: &ElementId,
+    ) -> impl Iterator<Item = &RelationshipMetadata> {
+        self.incoming_relationships_by_element
+            .get(element_id)
+            .into_iter()
+            .flatten()
+            .filter_map(|relationship_id| self.relationships.get(relationship_id))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +66,28 @@ pub struct ElementMetadata {
     pub technology: Option<String>,
     pub tags: Vec<String>,
     pub kind: ElementKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelationshipMetadata {
+    pub id: RelationshipId,
+    pub source_id: ElementId,
+    pub destination_id: ElementId,
+    pub description: Option<String>,
+    pub technology: Option<String>,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ConnectionCounts {
+    pub outgoing: usize,
+    pub incoming: usize,
+}
+
+impl ConnectionCounts {
+    pub const fn total(self) -> usize {
+        self.outgoing + self.incoming
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,51 +275,55 @@ pub fn load_workspace_model(exported: &ExportedWorkspace) -> WorkspaceModel {
     else {
         return WorkspaceModel::default();
     };
-    let mut elements = HashMap::new();
-    if let Some(model) = raw.model {
-        for person in model.people.unwrap_or_default() {
-            insert_element(&mut elements, person, ElementKind::Person);
+    let mut workspace_model = WorkspaceModel::default();
+    if let Some(raw_model) = raw.model {
+        for person in raw_model.people.unwrap_or_default() {
+            collect_element(&mut workspace_model, person, ElementKind::Person);
         }
-        for system in model.software_systems.unwrap_or_default() {
+        for system in raw_model.software_systems.unwrap_or_default() {
             for container in system.containers.clone().unwrap_or_default() {
                 for component in container.components.clone().unwrap_or_default() {
-                    insert_element(&mut elements, component, ElementKind::Component);
+                    collect_element(&mut workspace_model, component, ElementKind::Component);
                 }
-                insert_element(&mut elements, container, ElementKind::Container);
+                collect_element(&mut workspace_model, container, ElementKind::Container);
             }
-            insert_element(&mut elements, system, ElementKind::SoftwareSystem);
+            collect_element(&mut workspace_model, system, ElementKind::SoftwareSystem);
         }
-        for node in model.deployment_nodes.unwrap_or_default() {
-            collect_deployment(&mut elements, node);
+        for node in raw_model.deployment_nodes.unwrap_or_default() {
+            collect_deployment(&mut workspace_model, node);
         }
     }
-    WorkspaceModel { elements }
+    workspace_model
 }
 
-fn collect_deployment(
-    elements: &mut HashMap<ElementId, ElementMetadata>,
-    node: StructurizrNodeJson,
-) {
+fn collect_deployment(model: &mut WorkspaceModel, node: StructurizrNodeJson) {
     for instance in node.software_system_instances.clone().unwrap_or_default() {
-        insert_element(elements, instance, ElementKind::SoftwareSystemInstance);
+        collect_element(model, instance, ElementKind::SoftwareSystemInstance);
     }
     for instance in node.container_instances.clone().unwrap_or_default() {
-        insert_element(elements, instance, ElementKind::ContainerInstance);
+        collect_element(model, instance, ElementKind::ContainerInstance);
     }
     for child in node.children.clone().unwrap_or_default() {
-        collect_deployment(elements, child);
+        collect_deployment(model, child);
     }
     for infra in node.infrastructure_nodes.clone().unwrap_or_default() {
-        insert_element(elements, infra, ElementKind::InfrastructureNode);
+        collect_element(model, infra, ElementKind::InfrastructureNode);
     }
-    insert_element(elements, node, ElementKind::DeploymentNode);
+    collect_element(model, node, ElementKind::DeploymentNode);
+}
+
+fn collect_element<T: ElementJson>(model: &mut WorkspaceModel, raw: T, kind: ElementKind) {
+    let source_id = insert_element(&mut model.elements, &raw, kind);
+    for relationship in raw.relationships() {
+        insert_relationship(model, &source_id, relationship);
+    }
 }
 
 fn insert_element<T: ElementJson>(
     map: &mut HashMap<ElementId, ElementMetadata>,
-    raw: T,
+    raw: &T,
     kind: ElementKind,
-) {
+) -> ElementId {
     let id = ElementId::new(raw.id());
     let entry = ElementMetadata {
         id: id.clone(),
@@ -276,18 +336,76 @@ fn insert_element<T: ElementJson>(
             .technology()
             .map(str::to_owned)
             .filter(|s| !s.is_empty()),
-        tags: raw
-            .tags_str()
-            .map(|s| {
-                s.split(',')
-                    .map(|t| t.trim().to_owned())
-                    .filter(|t| !t.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default(),
+        tags: parse_tags(raw.tags_str()),
         kind,
     };
     map.insert(id, entry);
+    ElementId::new(raw.id())
+}
+
+fn insert_relationship(
+    model: &mut WorkspaceModel,
+    source_id: &ElementId,
+    raw: StructurizrRelationshipJson,
+) {
+    let Some(destination_id) = raw
+        .destination_id
+        .filter(|destination_id| !destination_id.is_empty())
+        .map(ElementId::new)
+    else {
+        return;
+    };
+    let source_id = raw
+        .source_id
+        .filter(|source_id| !source_id.is_empty())
+        .map(ElementId::new)
+        .unwrap_or_else(|| source_id.clone());
+    let relationship_id = raw
+        .id
+        .filter(|id| !id.is_empty())
+        .map(RelationshipId::new)
+        .unwrap_or_else(|| {
+            RelationshipId::new(format!(
+                "{}->{}#{}",
+                source_id,
+                destination_id,
+                model.relationships.len() + 1
+            ))
+        });
+    if model.relationships.contains_key(&relationship_id) {
+        return;
+    }
+    let relationship = RelationshipMetadata {
+        id: relationship_id.clone(),
+        source_id: source_id.clone(),
+        destination_id: destination_id.clone(),
+        description: raw
+            .description
+            .filter(|description| !description.is_empty()),
+        technology: raw.technology.filter(|technology| !technology.is_empty()),
+        tags: parse_tags(raw.tags.as_deref()),
+    };
+    model
+        .outgoing_relationships_by_element
+        .entry(source_id)
+        .or_default()
+        .push(relationship_id.clone());
+    model
+        .incoming_relationships_by_element
+        .entry(destination_id)
+        .or_default()
+        .push(relationship_id.clone());
+    model.relationships.insert(relationship_id, relationship);
+}
+
+fn parse_tags(tags: Option<&str>) -> Vec<String> {
+    tags.map(|s| {
+        s.split(',')
+            .map(|t| t.trim().to_owned())
+            .filter(|t| !t.is_empty())
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 trait ElementJson {
@@ -296,6 +414,7 @@ trait ElementJson {
     fn description(&self) -> Option<&str>;
     fn technology(&self) -> Option<&str>;
     fn tags_str(&self) -> Option<&str>;
+    fn relationships(&self) -> Vec<StructurizrRelationshipJson>;
 }
 
 impl ElementJson for StructurizrElementJson {
@@ -313,6 +432,9 @@ impl ElementJson for StructurizrElementJson {
     }
     fn tags_str(&self) -> Option<&str> {
         self.tags.as_deref()
+    }
+    fn relationships(&self) -> Vec<StructurizrRelationshipJson> {
+        self.relationships.clone().unwrap_or_default()
     }
 }
 
@@ -332,6 +454,9 @@ impl ElementJson for StructurizrSystemJson {
     fn tags_str(&self) -> Option<&str> {
         self.tags.as_deref()
     }
+    fn relationships(&self) -> Vec<StructurizrRelationshipJson> {
+        self.relationships.clone().unwrap_or_default()
+    }
 }
 
 impl ElementJson for StructurizrContainerJson {
@@ -350,6 +475,9 @@ impl ElementJson for StructurizrContainerJson {
     fn tags_str(&self) -> Option<&str> {
         self.tags.as_deref()
     }
+    fn relationships(&self) -> Vec<StructurizrRelationshipJson> {
+        self.relationships.clone().unwrap_or_default()
+    }
 }
 
 impl ElementJson for StructurizrNodeJson {
@@ -367,6 +495,9 @@ impl ElementJson for StructurizrNodeJson {
     }
     fn tags_str(&self) -> Option<&str> {
         self.tags.as_deref()
+    }
+    fn relationships(&self) -> Vec<StructurizrRelationshipJson> {
+        self.relationships.clone().unwrap_or_default()
     }
 }
 
@@ -533,6 +664,7 @@ struct StructurizrElementJson {
     description: Option<String>,
     technology: Option<String>,
     tags: Option<String>,
+    relationships: Option<Vec<StructurizrRelationshipJson>>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -543,6 +675,7 @@ struct StructurizrSystemJson {
     description: Option<String>,
     tags: Option<String>,
     containers: Option<Vec<StructurizrContainerJson>>,
+    relationships: Option<Vec<StructurizrRelationshipJson>>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -554,6 +687,7 @@ struct StructurizrContainerJson {
     technology: Option<String>,
     tags: Option<String>,
     components: Option<Vec<StructurizrElementJson>>,
+    relationships: Option<Vec<StructurizrRelationshipJson>>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -568,6 +702,18 @@ struct StructurizrNodeJson {
     infrastructure_nodes: Option<Vec<StructurizrElementJson>>,
     software_system_instances: Option<Vec<StructurizrElementJson>>,
     container_instances: Option<Vec<StructurizrElementJson>>,
+    relationships: Option<Vec<StructurizrRelationshipJson>>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct StructurizrRelationshipJson {
+    id: Option<String>,
+    source_id: Option<String>,
+    destination_id: Option<String>,
+    description: Option<String>,
+    technology: Option<String>,
+    tags: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -698,6 +844,7 @@ fn normalize_view_key(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ids::RelationshipId;
 
     #[test]
     fn resolves_workspace_file() {
@@ -741,6 +888,83 @@ mod tests {
         assert_eq!(
             metadata.find_for_svg_stem("containers").unwrap().view_type,
             "Container"
+        );
+    }
+
+    #[test]
+    fn loads_relationship_metadata_and_connection_indexes() {
+        let dir = tempfile::tempdir().unwrap();
+        let json = dir.path().join("workspace.json");
+        fs::write(
+            &json,
+            r#"{
+              "model": {
+                "people": [{
+                  "id": "1",
+                  "name": "User",
+                  "relationships": [{
+                    "id": "10",
+                    "destinationId": "2",
+                    "description": "Uses",
+                    "technology": "HTTPS",
+                    "tags": "Relationship, Synchronous"
+                  }]
+                }],
+                "softwareSystems": [{
+                  "id": "2",
+                  "name": "System",
+                  "relationships": [{
+                    "id": "11",
+                    "sourceId": "2",
+                    "destinationId": "1",
+                    "description": "Responds to",
+                    "tags": "Relationship"
+                  }]
+                }]
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let exported = ExportedWorkspace {
+            _temp_dir: tempfile::tempdir().unwrap(),
+            output_dir: dir.path().to_path_buf(),
+            workspace_json: Some(json),
+        };
+        let model = load_workspace_model(&exported);
+        let user = ElementId::new("1");
+        let system = ElementId::new("2");
+
+        assert_eq!(model.relationships.len(), 2);
+        assert_eq!(model.elements.get(&user).unwrap().name, "User");
+        assert_eq!(model.elements.get(&system).unwrap().name, "System");
+
+        let uses = model.relationships.get("10").unwrap();
+        assert_eq!(uses.id, RelationshipId::new("10"));
+        assert_eq!(uses.source_id, user);
+        assert_eq!(uses.destination_id, system);
+        assert_eq!(uses.description.as_deref(), Some("Uses"));
+        assert_eq!(uses.technology.as_deref(), Some("HTTPS"));
+        assert_eq!(uses.tags, ["Relationship", "Synchronous"]);
+
+        let outgoing = model
+            .outgoing_relationships(&ElementId::new("1"))
+            .map(|relationship| relationship.id.clone())
+            .collect::<Vec<_>>();
+        let incoming = model
+            .incoming_relationships(&ElementId::new("1"))
+            .map(|relationship| relationship.id.clone())
+            .collect::<Vec<_>>();
+        let counts = model.connection_counts(&ElementId::new("1"));
+
+        assert_eq!(outgoing, [RelationshipId::new("10")]);
+        assert_eq!(incoming, [RelationshipId::new("11")]);
+        assert_eq!(
+            counts,
+            ConnectionCounts {
+                outgoing: 1,
+                incoming: 1
+            }
         );
     }
 

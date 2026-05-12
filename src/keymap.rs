@@ -58,6 +58,10 @@ impl KeyMapExt for KeyMap {
         map.bind(KeyTrigger::Char('B'), PendingCommand::CycleScaleBasis);
         map.bind(KeyTrigger::Char('O'), PendingCommand::CycleOverflow);
         map.bind(KeyTrigger::Char('Z'), PendingCommand::CycleZoomStep);
+        map.bind(
+            KeyTrigger::Special(SpecialKey::Enter),
+            PendingCommand::FollowConnection,
+        );
         map.bind(KeyTrigger::Char('i'), PendingCommand::Inspect);
         map.bind(KeyTrigger::Char('I'), PendingCommand::Inspect);
         map.bind(
@@ -150,6 +154,16 @@ mod tests {
         for (arrow, vim) in pairs {
             assert_eq!(map.lookup(arrow), map.lookup(vim));
         }
+    }
+
+    #[test]
+    fn enter_follows_connection() {
+        let map = defaults();
+
+        assert!(matches!(
+            map.lookup(Key::Enter),
+            Some(PendingCommand::FollowConnection)
+        ));
     }
 
     #[test]

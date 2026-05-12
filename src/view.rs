@@ -1,5 +1,5 @@
 use crate::config::PlacementChoiceConfig;
-use crate::ids::{ElementId, ViewId};
+use crate::ids::{ElementId, RelationshipId, ViewId};
 use crate::render::{render_svg, RasterBudget, RenderedView};
 use crate::workspace::{ElementMetadata, ExportedWorkspace, ViewInfo, WorkspaceModel};
 use anyhow::{anyhow, bail, Result};
@@ -13,6 +13,20 @@ use tui_kit::widgets::image_viewport::{
     ImageScale, ImageViewportPlacement, ImageViewportWidget, PixelDistance, ResizePolicy,
     ScaledPixelOffset, StepDirection, ViewportAxis, ViewportImage, ZoomDirection, ZoomFactor,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionDirection {
+    Outgoing,
+    Incoming,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectionNavigationCandidate {
+    pub relationship_id: RelationshipId,
+    pub direction: ConnectionDirection,
+    pub connected_element_id: ElementId,
+    pub view_id: ViewId,
+}
 
 #[derive(Debug)]
 pub struct ViewStore {
@@ -72,6 +86,55 @@ impl ViewStore {
 
     pub fn element_metadata(&self, id: &ElementId) -> Option<&ElementMetadata> {
         self.model.elements.get(id)
+    }
+
+    pub fn connection_candidates_for_element(
+        &self,
+        current: ViewId,
+        element_id: &ElementId,
+    ) -> Vec<ConnectionNavigationCandidate> {
+        let outgoing = self
+            .model
+            .outgoing_relationships(element_id)
+            .flat_map(|rel| {
+                self.candidate_views_for_element(current, &rel.destination_id)
+                    .into_iter()
+                    .map(move |view_id| ConnectionNavigationCandidate {
+                        relationship_id: rel.id.clone(),
+                        direction: ConnectionDirection::Outgoing,
+                        connected_element_id: rel.destination_id.clone(),
+                        view_id,
+                    })
+            });
+        let incoming = self
+            .model
+            .incoming_relationships(element_id)
+            .flat_map(|rel| {
+                self.candidate_views_for_element(current, &rel.source_id)
+                    .into_iter()
+                    .map(move |view_id| ConnectionNavigationCandidate {
+                        relationship_id: rel.id.clone(),
+                        direction: ConnectionDirection::Incoming,
+                        connected_element_id: rel.source_id.clone(),
+                        view_id,
+                    })
+            });
+
+        outgoing.chain(incoming).collect()
+    }
+
+    fn candidate_views_for_element(&self, current: ViewId, element_id: &ElementId) -> Vec<ViewId> {
+        self.views
+            .iter()
+            .enumerate()
+            .filter_map(|(index, view)| {
+                let view_id = ViewId::new(index);
+                (view_id != current
+                    && !view.kind.is_legend()
+                    && view.element_ids.contains(element_id))
+                .then_some(view_id)
+            })
+            .collect()
     }
 
     pub fn element_at_canvas_point(
@@ -424,6 +487,8 @@ pub fn diagram_placement_policy(choice: &PlacementChoiceConfig) -> PlacementPoli
 mod tests {
     use super::*;
     use crate::render::ElementBBox;
+    use crate::workspace::RelationshipMetadata;
+    use std::collections::HashMap;
     use std::fs;
     use tui_kit::layout::{CellPixel, CellSize};
 
@@ -452,6 +517,20 @@ mod tests {
         }
     }
 
+    fn view_with_elements(key: &str, kind: crate::workspace::ViewKind, ids: &[&str]) -> ViewInfo {
+        ViewInfo {
+            key: key.to_owned(),
+            name: key.to_owned(),
+            kind,
+            description: None,
+            svg_path: std::path::PathBuf::from(format!("{key}.svg")),
+            element_ids: ids.iter().copied().map(ElementId::new).collect(),
+            child_view_by_element_id: HashMap::new(),
+            primary_view_key: None,
+            key_view_key: None,
+        }
+    }
+
     fn rendered_view(raster: PixelSize) -> RenderedView {
         let rgba_len = raster.width.saturating_mul(raster.height).saturating_mul(4) as usize;
         RenderedView {
@@ -469,6 +548,17 @@ mod tests {
             .with_placement_policy(policy);
         store.insert_rendered(ViewId::first(), rendered_view(raster));
         store
+    }
+
+    fn relationship(id: &str, source: &str, destination: &str) -> RelationshipMetadata {
+        RelationshipMetadata {
+            id: RelationshipId::new(id),
+            source_id: ElementId::new(source),
+            destination_id: ElementId::new(destination),
+            description: None,
+            technology: None,
+            tags: Vec::new(),
+        }
     }
 
     #[test]
@@ -499,6 +589,74 @@ mod tests {
     #[test]
     fn rejects_empty_view_store() {
         assert!(ViewStore::new(Vec::new(), budget()).is_err());
+    }
+
+    #[test]
+    fn connection_candidates_follow_outgoing_and_incoming_relationships_to_views() {
+        let mut model = WorkspaceModel::default();
+        model.relationships.insert(
+            RelationshipId::new("r1"),
+            relationship("r1", "api", "database"),
+        );
+        model.relationships.insert(
+            RelationshipId::new("r2"),
+            relationship("r2", "browser", "api"),
+        );
+        model
+            .outgoing_relationships_by_element
+            .insert(ElementId::new("api"), vec![RelationshipId::new("r1")]);
+        model
+            .incoming_relationships_by_element
+            .insert(ElementId::new("api"), vec![RelationshipId::new("r2")]);
+
+        let store = ViewStore::new(
+            vec![
+                view_with_elements(
+                    "current",
+                    crate::workspace::ViewKind::Container,
+                    &["api", "database", "browser"],
+                ),
+                view_with_elements(
+                    "database-view",
+                    crate::workspace::ViewKind::Component,
+                    &["database"],
+                ),
+                view_with_elements(
+                    "browser-view",
+                    crate::workspace::ViewKind::SystemContext,
+                    &["browser"],
+                ),
+                view_with_elements(
+                    "database-key",
+                    crate::workspace::ViewKind::Key,
+                    &["database"],
+                ),
+            ],
+            budget(),
+        )
+        .unwrap()
+        .with_model(model);
+
+        let candidates =
+            store.connection_candidates_for_element(ViewId::first(), &ElementId::new("api"));
+
+        assert_eq!(
+            candidates,
+            vec![
+                ConnectionNavigationCandidate {
+                    relationship_id: RelationshipId::new("r1"),
+                    direction: ConnectionDirection::Outgoing,
+                    connected_element_id: ElementId::new("database"),
+                    view_id: ViewId::new(1),
+                },
+                ConnectionNavigationCandidate {
+                    relationship_id: RelationshipId::new("r2"),
+                    direction: ConnectionDirection::Incoming,
+                    connected_element_id: ElementId::new("browser"),
+                    view_id: ViewId::new(2),
+                },
+            ]
+        );
     }
 
     #[test]
