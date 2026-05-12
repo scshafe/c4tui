@@ -490,7 +490,8 @@ impl App {
                     .store
                     .connection_candidates_for_element(current, &source_element_id);
                 terminal.teardown_image_viewport(current)?;
-                let picker_inner = ConnectionPicker::new(candidates, &self.store);
+                let picker_inner =
+                    ConnectionPicker::new(&source_element_id, candidates, &self.store);
                 self.focus
                     .push_scope(
                         SCOPE_CONNECTION_PICKER,

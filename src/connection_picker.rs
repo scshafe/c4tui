@@ -1,3 +1,4 @@
+use crate::ids::ElementId;
 #[cfg(test)]
 use crate::ids::ViewId;
 use crate::view::{ConnectionDirection, ConnectionNavigationCandidate, ViewStore};
@@ -13,6 +14,7 @@ use tui_kit::widgets::grid::{Grid, GridStyle};
 #[derive(Debug)]
 pub struct ConnectionPicker {
     id: ComponentId,
+    source_element_name: String,
     items: Vec<ConnectionPickerItem>,
     selected_index: usize,
     dirty: DirtyState,
@@ -56,7 +58,17 @@ const TILE_MIN_COLS: u16 = 34;
 const TILE_ROWS: u16 = 5;
 
 impl ConnectionPicker {
-    pub fn new(candidates: Vec<ConnectionNavigationCandidate>, store: &ViewStore) -> Self {
+    pub fn new(
+        source_element_id: &ElementId,
+        candidates: Vec<ConnectionNavigationCandidate>,
+        store: &ViewStore,
+    ) -> Self {
+        let source_element_name = store
+            .model
+            .elements
+            .get(source_element_id)
+            .map(|element| element.name.clone())
+            .unwrap_or_else(|| source_element_id.to_string());
         let items = candidates
             .into_iter()
             .map(|candidate| {
@@ -90,6 +102,7 @@ impl ConnectionPicker {
             .collect();
         Self {
             id: ComponentId::new("c4tui-connection-picker"),
+            source_element_name,
             items,
             selected_index: 0,
             dirty: DirtyState::paint(DirtyReason::Explicit),
@@ -136,8 +149,15 @@ impl ConnectionPicker {
             })
             .collect::<Vec<_>>();
         RenderedConnectionPicker {
-            header: "Pick a connection  -  Enter to navigate, Esc to cancel".to_owned(),
-            footer: format!("showing {} navigable connections", self.items.len()),
+            header: format!(
+                "Connections for {}  -  Enter to navigate, Esc to cancel",
+                self.source_element_name
+            ),
+            footer: format!(
+                "showing {} navigable {}",
+                self.items.len(),
+                plural(self.items.len(), "connection", "connections")
+            ),
             selected_index: (!self.items.is_empty()).then_some(self.selected_index),
             items,
         }
@@ -240,7 +260,12 @@ impl BufferComponent for ConnectionPicker {
 impl ConnectionPicker {
     fn render_grid(&mut self, body: Rect, buffer: &mut Buffer) {
         if self.items.is_empty() {
-            buffer.set_string(body.x, body.y, "No navigable connections", Style::default());
+            buffer.set_string(
+                body.x,
+                body.y,
+                format!("No navigable connections for {}", self.source_element_name),
+                Style::default(),
+            );
             return;
         }
 
@@ -297,8 +322,16 @@ impl ConnectionPicker {
 
 fn direction_label(direction: ConnectionDirection) -> &'static str {
     match direction {
-        ConnectionDirection::Outgoing => "out",
-        ConnectionDirection::Incoming => "in",
+        ConnectionDirection::Outgoing => "to",
+        ConnectionDirection::Incoming => "from",
+    }
+}
+
+fn plural(count: usize, singular: &'static str, plural: &'static str) -> &'static str {
+    if count == 1 {
+        singular
+    } else {
+        plural
     }
 }
 
@@ -356,6 +389,17 @@ mod tests {
             },
         ];
         let mut model = crate::workspace::WorkspaceModel::default();
+        model.elements.insert(
+            ElementId::new("api"),
+            ElementMetadata {
+                id: ElementId::new("api"),
+                name: "API".to_owned(),
+                description: None,
+                technology: None,
+                tags: Vec::new(),
+                kind: ElementKind::Container,
+            },
+        );
         model.elements.insert(
             ElementId::new("database"),
             ElementMetadata {
@@ -431,21 +475,24 @@ mod tests {
     #[test]
     fn render_includes_connection_fields() {
         let store = store();
-        let picker = ConnectionPicker::new(candidates(), &store);
+        let picker = ConnectionPicker::new(&ElementId::new("api"), candidates(), &store);
         let rendered = picker.render();
 
+        assert!(rendered.header.contains("Connections for API"));
+        assert_eq!(rendered.footer, "showing 2 navigable connections");
         assert_eq!(rendered.items.len(), 2);
-        assert_eq!(rendered.items[0].direction, "out");
+        assert_eq!(rendered.items[0].direction, "to");
         assert_eq!(rendered.items[0].connected_element_name, "Database");
         assert_eq!(rendered.items[0].relationship_detail, "Reads from (JDBC)");
         assert_eq!(rendered.items[0].target_view, "Database View");
         assert!(rendered.items[0].selected);
+        assert_eq!(rendered.items[1].direction, "from");
     }
 
     #[test]
     fn keyboard_navigation_selects_and_wraps() {
         let store = store();
-        let mut picker = ConnectionPicker::new(candidates(), &store);
+        let mut picker = ConnectionPicker::new(&ElementId::new("api"), candidates(), &store);
 
         picker.handle_key(Key::Down);
         assert_eq!(picker.selected_view_id(), Some(ViewId::new(2)));
@@ -463,7 +510,7 @@ mod tests {
     #[test]
     fn esc_cancels() {
         let store = store();
-        let mut picker = ConnectionPicker::new(candidates(), &store);
+        let mut picker = ConnectionPicker::new(&ElementId::new("api"), candidates(), &store);
 
         assert_eq!(picker.handle_key(Key::Esc), ConnectionPickerOutcome::Cancel);
     }
@@ -471,7 +518,7 @@ mod tests {
     #[test]
     fn render_buffer_uses_grid_surface() {
         let store = store();
-        let mut picker = ConnectionPicker::new(candidates(), &store);
+        let mut picker = ConnectionPicker::new(&ElementId::new("api"), candidates(), &store);
         let mut buffer = Buffer::empty(Rect::new(0, 0, 80, 20));
 
         picker

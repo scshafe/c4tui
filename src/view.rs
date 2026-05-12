@@ -47,6 +47,13 @@ pub struct ViewportRenderParts<'a> {
     pub widget: &'a mut ImageViewportWidget,
 }
 
+fn direction_rank(direction: ConnectionDirection) -> u8 {
+    match direction {
+        ConnectionDirection::Outgoing => 0,
+        ConnectionDirection::Incoming => 1,
+    }
+}
+
 impl ViewStore {
     pub fn new(views: Vec<ViewInfo>, budget: RasterBudget) -> Result<Self> {
         if views.is_empty() {
@@ -122,7 +129,27 @@ impl ViewStore {
                     })
             });
 
-        outgoing.chain(incoming).collect()
+        let mut candidates = outgoing.chain(incoming).collect::<Vec<_>>();
+        candidates.sort_by(|left, right| {
+            direction_rank(left.direction)
+                .cmp(&direction_rank(right.direction))
+                .then_with(|| {
+                    self.element_label(&left.connected_element_id)
+                        .cmp(self.element_label(&right.connected_element_id))
+                })
+                .then_with(|| {
+                    self.view(left.view_id)
+                        .name
+                        .cmp(&self.view(right.view_id).name)
+                })
+                .then_with(|| left.relationship_id.cmp(&right.relationship_id))
+        });
+        candidates.dedup_by(|left, right| {
+            left.direction == right.direction
+                && left.connected_element_id == right.connected_element_id
+                && left.view_id == right.view_id
+        });
+        candidates
     }
 
     pub fn connection_candidate_counts_for_element(
@@ -153,6 +180,14 @@ impl ViewStore {
                 .then_some(view_id)
             })
             .collect()
+    }
+
+    fn element_label<'a>(&'a self, element_id: &'a ElementId) -> &'a str {
+        self.model
+            .elements
+            .get(element_id)
+            .map(|element| element.name.as_str())
+            .unwrap_or_else(|| element_id.as_str())
     }
 
     pub fn element_at_canvas_point(
@@ -624,9 +659,17 @@ mod tests {
             RelationshipId::new("r3"),
             relationship("r3", "api", "cache"),
         );
+        model.relationships.insert(
+            RelationshipId::new("r4"),
+            relationship("r4", "api", "database"),
+        );
         model.outgoing_relationships_by_element.insert(
             ElementId::new("api"),
-            vec![RelationshipId::new("r1"), RelationshipId::new("r3")],
+            vec![
+                RelationshipId::new("r1"),
+                RelationshipId::new("r3"),
+                RelationshipId::new("r4"),
+            ],
         );
         model
             .incoming_relationships_by_element
