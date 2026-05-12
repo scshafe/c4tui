@@ -1,130 +1,214 @@
-# c4tui — Specification
+# c4tui - Specification
 
-This document describes *what* c4tui does. The *how* lives in [architecture.md](./architecture.md); the *when* lives in [implementation-plan.md](./implementation-plan.md).
+This document describes what c4tui does. The implementation structure lives in
+[architecture.md](./architecture.md); delivery planning lives in
+[implementation-plan.md](./implementation-plan.md).
 
 ## 1. Purpose
 
-c4tui is a terminal application that loads a Structurizr workspace and provides interactive read-only browsing of its C4 views. It is a viewer, not an editor. Its differentiating capability is **click-to-drill navigation**: clicking on a graphical element in a view that has a defined child view causes navigation into that child view.
+c4tui is a terminal application for read-only browsing of Structurizr C4
+workspaces. It renders exported diagram views as inline terminal images and
+provides keyboard-first traversal between related diagrams.
 
-## 2. Goals
+c4tui is not a diagram editor and does not calculate C4 layouts itself. The
+Structurizr workspace remains the source of truth.
 
-- Faithful rendering of Structurizr-generated diagrams in a Kitty-graphics-capable terminal.
-- Click-to-drill navigation matching the conceptual behavior of Structurizr's web UI.
-- Pan and zoom on individual views.
-- Single static binary, no background daemon, no JVM at runtime.
-- Loud, clear failure when the environment cannot satisfy a feature — never silently render incorrectly.
+## 2. Product Goals
 
-## 3. Non-goals (v1)
+- Render Structurizr views faithfully in a Kitty-graphics-capable terminal.
+- Make the current diagram navigable through a compact "link directory" of
+  immediately reachable diagrams.
+- Let users traverse with the keyboard: select a linked diagram, press Enter,
+  and maintain breadcrumbs for Back navigation.
+- Preserve optional mouse-based element drill for users and terminals where it
+  works, without making mouse precision the primary navigation model.
+- Support relationship traversal: from a selected or pinned element, show
+  incoming/outgoing relationships that lead to another view.
+- Keep pan, zoom, reload, logging, and view search available during browsing.
+- Fail loudly when required terminal or Structurizr capabilities are missing.
 
-- Editing the workspace.
-- Authoring new diagrams or views.
-- Supporting non-Kitty image protocols (Sixel, iTerm2 inline) — explicitly deferred.
-- Diagram layout calculation. c4tui delegates layout to Structurizr's existing tooling and consumes the SVG output.
-- Browser-equivalent fidelity (animations, hover tooltips, complex theme features).
-- Themes that fetch from the Structurizr Cloud at runtime. Themes referenced by URL must already be resolvable at workspace-load time, or are reported as missing.
+## 3. Non-goals
+
+- Editing or saving Structurizr workspaces.
+- Authoring new diagrams, views, docs, or ADRs.
+- Reimplementing the Structurizr DSL parser, layout engine, or exporter.
+- Browser-equivalent Structurizr UI fidelity.
+- Supporting non-Kitty inline image protocols in v1.
+- Running multiple workspaces in one session.
+- Fetching cloud themes or other remote workspace dependencies directly from
+  c4tui. The workspace/export step is responsible for resolving them.
 
 ## 4. Inputs
 
-### 4.1 Workspace source
+### 4.1 Workspace Source
 
-c4tui accepts one of:
+c4tui accepts:
 
-- A `workspace.dsl` file (the Structurizr DSL).
-- A `workspace.json` file (the serialized workspace model).
+- a `workspace.dsl` file;
+- a `workspace.json` file;
+- a directory containing either file.
 
-When given a directory containing both, c4tui prefers `workspace.dsl` for source-of-truth correctness.
+When a directory contains both `workspace.dsl` and `workspace.json`, c4tui
+prefers `workspace.dsl` as the source of truth.
 
-### 4.2 External tooling
+### 4.2 Structurizr Export
 
-c4tui invokes the Structurizr CLI (`structurizr-cli`) as a subprocess to convert the workspace into per-view SVG. The CLI must be on `PATH` or specified via `--structurizr-cli <path>`. The export contract is:
+c4tui invokes the upstream `structurizr` binary on `PATH`:
 
+```text
+structurizr export --workspace <path> --format svg --output <temporary-dir>
 ```
-structurizr-cli export -workspace <path> -format <svg-format> -output <dir>
-```
 
-The exact format flag is determined in architecture.md; the requirement is that the resulting SVG carries Structurizr element IDs in `<g id="...">` groups.
+The export must produce one SVG per view. When `workspace.json` is available,
+c4tui also reads it for view metadata, element membership, parent view scopes,
+and relationships.
 
-### 4.3 Terminal contract
+### 4.3 Terminal Contract
 
-The terminal must support:
+Required:
 
-- Kitty graphics protocol: transmit, display, delete, persistent image IDs, Z-index.
-- SGR pixel mouse mode (CSI ?1016h).
-- Kitty keyboard protocol — recommended, not required for v1.
-- Truecolor.
+- Kitty graphics protocol support.
+- True color.
 
-c4tui detects support at startup via terminal capability queries. It refuses to start if the minimums are not met.
+Recommended:
 
-## 5. Behavior
+- SGR pixel mouse mode for optional mouse drill, drag, and wheel interactions.
+- Accurate cell and pixel terminal size reporting.
 
-### 5.1 Startup
+If Kitty graphics is unavailable, c4tui exits non-zero with a diagnostic.
 
-1. Parse CLI arguments.
-2. Detect terminal capabilities. Abort with a diagnostic if Kitty graphics is absent.
-3. Load the workspace and enumerate views.
-4. Render the first view (default to `Landscape` if present, else the first defined view).
+## 5. Core Concepts
 
-### 5.2 View navigation
+### 5.1 View
 
-- The current view is rendered as a high-DPI raster image, fit to the available terminal area.
-- A status line displays: current view name, view type, breadcrumb of prior views.
-- A view picker is accessible via a keybinding.
-- Forward navigation: clicking an element with a defined child view drills into it.
-- Backward navigation: a keybinding pops the breadcrumb stack.
+A Structurizr view exported as SVG and represented by metadata: key, name,
+kind, description, element IDs, optional legend view, and links to related
+views.
 
-### 5.3 Pan and zoom
+### 5.2 Linked Diagram
 
-- Zoom: keybindings or scroll wheel.
-- Pan: arrow keys or click-and-drag (in regions not occupied by a click-target element).
-- Re-rendering uses the cached high-DPI raster — no re-export required.
+A view reachable from the current context. c4tui recognizes two link families:
 
-### 5.4 Click-to-drill semantics
+- **Detail links**: views scoped to an element visible in the current diagram,
+  such as system context, container, component, and dynamic views. These are
+  derived from Structurizr view parent fields: `softwareSystemId`,
+  `containerId`, `componentId`, and `elementId`.
+- **Connection links**: views containing an element connected by an incoming or
+  outgoing relationship from the selected/pinned element.
 
-When the user clicks within the rendered image:
+### 5.3 Link Directory
 
-1. Click pixel coordinates are mapped from terminal-space to image-space, accounting for current pan/zoom.
-2. The click is hit-tested against per-element bounding boxes extracted from the SVG.
-3. If the hit element has a child view (e.g., System → Container, Container → Component), c4tui pushes the current view onto the breadcrumb stack and navigates to the child view.
-4. If the hit element has no child view, the click is ignored (an optional brief status hint may be shown).
+The target primary navigation surface for web-like traversal. It shows the
+numbered linked diagrams immediately reachable from the current view, highlights
+the current selection, and navigates with Enter.
 
-### 5.5 Reload
+### 5.4 Breadcrumb
 
-c4tui supports an explicit reload keybinding that re-runs the SVG export and refreshes the current view. File-watch-based auto-reload is deferred.
+A stack of prior views. Navigating to a linked view pushes the current view.
+Back pops the stack and returns to the previous view.
 
-## 6. Output
+### 5.5 Selected/Pinned Element
 
-c4tui writes no files. All output is written to the terminal:
+An element context used for relationship traversal and footer details. It may be
+set by inspection, optional mouse selection, or future keyboard selection.
 
-- Image data via Kitty graphics escape sequences.
-- Text (status line, view picker, error dialogs) via standard cell rendering.
+## 6. Behavior
 
-## 7. Error and failure modes
+### 6.1 Startup
+
+1. Parse CLI arguments and config.
+2. Detect terminal capabilities.
+3. Export the workspace with Structurizr.
+4. Discover exported SVG views and parse workspace metadata.
+5. Render the first view and enter the event loop.
+
+### 6.2 Diagram Rendering
+
+- The active view is rasterized from SVG and displayed with Kitty graphics.
+- The raster is cached per view.
+- Pan and zoom update image placement/source crop where possible instead of
+  re-exporting the workspace.
+- A footer shows view status, dimensions, transform settings, render progress,
+  and contextual hints.
+
+### 6.3 Global View Picker
+
+The global picker lists all views, supports filtering, and navigates directly to
+the chosen view. Direct global selection clears breadcrumbs because it is not a
+linked traversal.
+
+### 6.4 Link Directory
+
+The link directory should:
+
+- list only diagrams immediately reachable from the current context;
+- show stable numbers for visible entries;
+- highlight the currently selected entry;
+- support Up/Down or `j`/`k` selection movement;
+- support number-key selection where practical;
+- navigate on Enter;
+- cancel on Esc without changing navigation state.
+
+Detail links should be available even without a selected element. Connection
+links require a selected/pinned element context.
+
+### 6.5 Optional Mouse Drill
+
+Mouse clicks inside the rendered diagram may hit-test SVG element bounding boxes
+and open a related-view picker or navigate directly when exactly one target
+exists. This is an optional convenience path, not the primary navigation model.
+
+### 6.6 Relationship Traversal
+
+When an element context is selected, c4tui can show navigable incoming and
+outgoing relationships. Each relationship candidate includes:
+
+- direction;
+- connected element name;
+- relationship description and technology when present;
+- target view.
+
+Enter navigates to the selected target view and pins the connected element in
+that destination.
+
+### 6.7 Legend, Help, Log, Reload
+
+- Legend views can be opened from the active view when exported.
+- Help opens a modal command summary.
+- Logs are written to an in-memory buffer and optional file; the log viewer is
+  available in-app.
+- Reload re-runs Structurizr export, rebuilds metadata, clears image caches, and
+  resets navigation on success.
+
+## 7. Error Handling
 
 | Condition | Behavior |
 |---|---|
-| Terminal lacks Kitty graphics | Exit non-zero with diagnostic referencing supported terminals |
-| Terminal lacks SGR pixel mouse | Start in keyboard-only mode; click-to-drill disabled with notice |
-| `structurizr-cli` not found | Exit non-zero with installation pointer |
-| Workspace file not found | Exit non-zero with diagnostic |
-| Workspace DSL parse error | Exit non-zero, surface upstream error verbatim |
-| Cloud theme unreachable | Render without theme; warn in status line; do not block |
-| A single view fails to export | Skip in the picker; mark as broken; other views remain usable |
+| Terminal lacks Kitty graphics | Exit non-zero with supported-terminal guidance |
+| Structurizr binary missing | Exit non-zero with the failed command context |
+| Workspace path missing | Exit non-zero with the missing path |
+| Structurizr export fails | Show/export upstream stdout and stderr in the error |
+| Workspace metadata missing | Continue with exported SVGs, but linked navigation is reduced |
+| Theme or remote dependency cannot resolve | Surface the Structurizr export/validation error |
+| A view fails to rasterize | Report the failure and keep the app state recoverable where possible |
 
 ## 8. Configuration
 
-A single optional config file `~/.config/c4tui/config.toml`:
+c4tui reads `~/.config/c4tui/config.toml` when present, or a path supplied with
+`--config`. Config includes:
 
-- Default zoom step
-- DPI multiplier for raster export (default 4×)
-- Path to `structurizr-cli`
-- Keybindings
+- raster quality/budget;
+- keybindings;
+- zoom step presets;
+- placement scale basis and overflow policy;
+- workspace watch behavior.
 
-Precedence: CLI flags override config; config overrides defaults.
+CLI flags override config where both exist.
 
-## 9. Out of scope (explicit)
+## 9. Out of Scope
 
-- Multiple workspaces simultaneously.
-- Diff view between two workspace versions.
-- Export to PNG/PDF (delegate to `structurizr-cli`).
-- Embedding into other TUIs as a library.
-- Network-fetched workspaces (HTTP/git URLs).
+- Network workspace loading.
+- Exporting diagrams for external use beyond the Structurizr subprocess output.
+- Persistent app session state.
+- Terminal multiplexing workarounds that require emulator-specific state
+  outside the Kitty protocol.

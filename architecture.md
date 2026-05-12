@@ -1,196 +1,314 @@
-# c4tui — Architecture
+# c4tui - Architecture
 
-This document describes *how* c4tui is built. The *what* lives in [specification.md](./specification.md).
+This document describes how c4tui is built. Product behavior is specified in
+[specification.md](./specification.md).
 
 ## 1. Overview
 
-c4tui is a single-process Rust CLI with a small explicit update loop:
+c4tui is a single-process Rust CLI. It owns the Structurizr domain model and
+application state, while delegating reusable terminal primitives to `tui-kit`.
 
 ```text
-raw terminal bytes
-      │
-      ▼
-input parser → InputEvent → Command → AppState::apply
-                                      │
-                                      ├── Effect  ──► terminal / workspace side effect
-                                      │
-                                      ▼
-                                 RenderFrame ──► TerminalBackend
+Structurizr workspace
+        |
+        v
+structurizr export -> SVG views + workspace.json metadata
+        |
+        v
+ViewStore + WorkspaceModel
+        |
+        v
+InputEvent -> PendingCommand -> Command -> AppState::apply
+                                      |
+                                      +--> Effect -> App side effect
+                                      |
+                                      v
+                               RenderFrame -> TerminalBackend
 ```
 
-The split keeps most application behavior testable without a real terminal:
+The core split is:
 
-- `event.rs` maps semantic input into app commands.
-- `state.rs` owns navigation, pan/zoom transforms, update results, effects, and render-frame production.
-- `app.rs` is the orchestration shell: read input, map command, apply state, perform side effects, render.
-- `backend.rs` defines the terminal boundary used by both the real terminal session and tests.
+- `state.rs` decides how commands change navigation state.
+- `app.rs` performs effects, owns modal slots, and coordinates rendering.
+- `terminal.rs` is the real terminal backend.
+- `backend.rs` defines the backend trait and fake backend used by tests.
+- `tui-kit` supplies input types, focus scopes, component caching, grid widgets,
+  image viewport math, terminal lifecycle, scheduler primitives, and status-line
+  layout.
 
-## 2. Components
+## 2. Workspace Pipeline
 
-### 2.1 Workspace loader
+`workspace.rs` accepts a `workspace.dsl`, `workspace.json`, or directory. The
+loader prefers `workspace.dsl` when both files exist.
 
-The workspace pipeline accepts a path to `workspace.dsl`, `workspace.json`, or a directory containing one. When interactive viewing starts it invokes `structurizr-cli` as a subprocess to export SVG views and then parses `workspace.json` to learn:
-
-- view keys, names, and types;
-- element IDs present in each view;
-- child-view relationships used for click-to-drill navigation.
-
-Reload is modeled as an app effect. `Command::Reload` requests `Effect::ReloadWorkspace`; the app shell performs the subprocess/file I/O, then feeds success or failure back into `AppState`.
-
-### 2.2 SVG processor
-
-For each exported SVG, `render.rs` parses once with `usvg::Tree` and uses that same tree for both geometry and rasterization:
-
-1. Walk `usvg` groups with non-empty IDs.
-2. Use each group's computed absolute bounding box for hit testing.
-3. Rasterize with `resvg`/`tiny-skia` at the configured DPI multiplier.
-4. Encode the pixmap as PNG for Kitty image transmission.
-
-Using `usvg` geometry avoids hand-parsing SVG XML attributes and correctly handles nested transforms, scale, rotation, paths, images, text, and other shapes that `usvg` resolves.
-
-### 2.3 View store
-
-`ViewStore` owns view metadata, lazy rendered-view caches, and per-view transforms. Public boundaries use typed IDs:
+For interactive viewing, c4tui calls:
 
 ```text
-ViewId → ViewInfo {
-    key: String,
-    name: String,
-    view_type: String,
-    svg_path: PathBuf,
-    element_ids: HashSet<ElementId>,
-    child_view_by_element_id: HashMap<ElementId, ViewId>,
-}
-
-ViewId → RenderedView {
-    width: u32,
-    height: u32,
-    png: Vec<u8>,
-    bboxes: Vec<ElementBBox>,
-}
-
-ViewId → ViewTransform
+structurizr export --workspace <path> --format svg --output <temp-dir>
 ```
 
-Rasters are reused across navigation; pan/zoom changes the source rectangle displayed from the same cached image.
+The resulting temporary directory is retained for the lifetime of the current
+view store. c4tui discovers SVG files in that directory and reads
+`workspace.json` from one of:
 
-### 2.4 App state and commands
+1. the export output directory;
+2. the source path with a `.json` extension;
+3. the source path itself when the source is `workspace.json`.
 
-`AppState` contains:
+### 2.1 View Metadata
 
-- current `ViewId`;
-- breadcrumb stack;
+Workspace metadata is parsed into `ViewInfo` records:
+
+- key, name, kind, description;
+- SVG path;
+- element IDs present in the view;
+- legend/key view link;
+- related child/detail view keys grouped by parent element ID.
+
+Structurizr parent fields used for detail links:
+
+- `softwareSystemId`;
+- `containerId`;
+- `componentId`;
+- `elementId`.
+
+Multiple child/detail targets are preserved for one element. This is required
+when a system has a container view, deployment/infrastructure-oriented views,
+and dynamic views all scoped to the same element.
+
+### 2.2 Relationship Metadata
+
+The model parser indexes:
+
+- elements by `ElementId`;
+- relationships by `RelationshipId`;
+- outgoing relationship IDs by source element;
+- incoming relationship IDs by destination element.
+
+`ViewStore::connection_candidates_for_element` joins those indexes with view
+membership to produce navigable relationship candidates.
+
+## 3. Rendering Pipeline
+
+`render.rs` parses each SVG with `usvg` and rasterizes with `resvg`.
+
+For each view:
+
+1. Parse the SVG tree.
+2. Extract bounding boxes for groups with element IDs.
+3. Rasterize into RGBA pixels at the configured budget/quality.
+4. Encode PNG bytes for Kitty image transmission.
+5. Store the result as a `RenderedView`.
+
+Hit testing uses the extracted bounding boxes and the active image viewport
+transform. This supports optional mouse drill and element inspection, but the
+keyboard link directory should not depend on mouse hit testing.
+
+## 4. View Store
+
+`view.rs` owns:
+
+- `views: Vec<ViewInfo>`;
+- the parsed `WorkspaceModel`;
+- lazy rendered-view cache;
+- image viewport widgets and per-view transforms;
+- placement policy and raster budget;
+- the temporary export guard.
+
+Important view-store queries:
+
+- `child_view_ids_for_element(current, element_id)` resolves all detail views
+  linked from an element in the current view.
+- `connection_candidates_for_element(current, element_id)` resolves
+  relationship traversal targets that have a destination view.
+- `navigable_connection_counts_for_element` powers footer hints and counts.
+- `element_at_canvas_point` maps optional mouse coordinates into an element ID.
+
+## 5. State and Effects
+
+`state.rs` contains app navigation state:
+
+- current view;
+- breadcrumbs;
 - last drag point;
-- per-view pan/zoom state stored in `ViewStore`.
+- pinned element.
 
-`Command` values represent user intent: quit, open picker, select view, back, reload, help, drill by canvas point, zoom, pan, drag, and reset/fit. `AppState::apply(command, store)` mutates state and returns an `UpdateResult` containing:
+`Command` values represent user intent: quit, open picker, select view, select
+child view, inspect, open connection picker, select connection, reload, help,
+legend, pan, zoom, reset, drag, and no-op.
 
+`AppState::apply` returns an `UpdateResult`:
+
+- the canvas metrics used for the command;
 - whether a render is needed;
-- an optional `Effect` for imperative work such as quit, help, picker, reload, or image-cache clearing.
+- an optional `Effect`.
 
-`RenderFrame` is the declarative render input: current view, breadcrumbs, and the current view transform.
+Effects isolate imperative work from pure state transitions. Examples:
 
-### 2.5 Terminal backend
+- open a view picker;
+- open a child-view picker;
+- open a connection picker;
+- reload the workspace;
+- clear terminal image cache;
+- show help;
+- toggle log view.
 
-`TerminalBackend` is the imperative boundary:
+## 6. Navigation Model
 
-- report terminal/canvas size;
-- read `InputEvent`;
-- render a `RenderFrame`;
-- open picker/help/error/message dialogs;
-- clear terminal image cache.
+### 6.1 Current Implementation
 
-`TerminalSession` implements the trait for the real TTY. Tests use `FakeTerminalBackend` to script input and assert rendered frames/dialog effects without raw mode or a terminal emulator.
+c4tui currently has three navigation surfaces:
 
-The concrete terminal session owns:
+- global `ViewPicker` for direct view selection;
+- child/detail view picker when an element has multiple related child views;
+- `ConnectionPicker` for incoming/outgoing relationship traversal.
 
-- alternate screen and raw mode cleanup;
-- Kitty graphics image registry;
-- SGR pixel mouse setup;
-- image placement and source-rectangle updates;
-- status/help/picker overlays.
+Direct global selection clears breadcrumbs. Linked traversal pushes the current
+view before navigating.
 
-### 2.6 Input handling
+### 6.2 Link Directory Target
 
-`input.rs` parses raw keyboard and mouse bytes from stdin into low-level `Key` values. The terminal backend converts mouse coordinates into canvas coordinates and emits `InputEvent`. `event.rs` maps those events plus configured keybindings into `Command` values.
+The keyboard-first link directory should unify the "linked from here" behavior.
+Architecturally, it should be an app-owned component built over
+`tui_kit::widgets::grid`, similar to the existing view and connection pickers.
 
-Supported interactions include:
+The link directory should consume a `Vec<LinkCandidate>` assembled from:
 
-- view picker (`o`, arrows, Enter, Esc);
-- pan/zoom (`+`, `-`, arrows, drag, wheel);
-- reset/fit (`0`, `f`);
-- click-to-drill and Backspace navigation;
-- reload (`r`), help (`?`), quit (`q`).
+- detail links for elements visible in the current view;
+- connection links for the pinned/selected element, when present;
+- optional legend/key link for the current view.
 
-## 3. Data flow
+Recommended shape:
 
-```text
-workspace.dsl / workspace.json
-        │
-        ▼
-structurizr-cli export -format svg       (load and reload effect)
-        │
-        ▼
-exported SVGs + workspace.json
-        │
-        ├──► workspace metadata parser ──► ViewStore metadata
-        │
-        └──► usvg/resvg renderer ────────► RenderedView cache + hit boxes
-                                                ▲
-                                                │
-raw input ─► InputEvent ─► Command ─► AppState ─┴─► RenderFrame ─► TerminalBackend ─► terminal
+```rust,ignore
+struct LinkCandidate {
+    kind: LinkKind,
+    label: String,
+    detail: Option<String>,
+    target_view_id: ViewId,
+    pinned_element_after_navigation: Option<ElementId>,
+}
+
+enum LinkKind {
+    Detail,
+    ConnectionOutgoing,
+    ConnectionIncoming,
+    Legend,
+}
 ```
 
-## 4. Technology choices
+Selecting a candidate should dispatch a command that preserves the linked
+navigation semantics:
 
-| Layer | Choice | Why |
-|---|---|---|
-| Language | Rust | Single static binary, strong CLI/tooling ecosystem |
-| CLI parsing | `clap` | Standard typed argument parser |
-| Workspace JSON | `serde` + hand-modeled Structurizr subset | Model only the schema needed for navigation |
-| SVG geometry | `usvg` | Resolves SVG transforms and element bounds robustly |
-| SVG rasterization | `resvg` + `tiny-skia` | Pure Rust, no system graphics dependencies |
-| Terminal graphics | Direct Kitty protocol encoder | Precise image caching/source-rect control |
-| Terminal capability/input | Direct terminal escape handling | Small surface area; no async runtime required today |
-| Tests | Unit tests + fake terminal backend | Exercise state/backend behavior without a TTY |
+- push current view onto breadcrumbs;
+- set current view to the target;
+- optionally set pinned element;
+- clear drag state.
 
-### 4.1 Why SVG
+The directory should not require SVG hit testing. It is derived from metadata
+and current app context.
 
-`structurizr-cli` can export PlantUML, Mermaid, DOT, and SVG. c4tui uses SVG because:
+## 7. UI Components
 
-- Structurizr element IDs are preserved as SVG group IDs, enabling hit testing.
-- SVG can be rasterized at any DPI without re-exporting.
-- `usvg`/`resvg` provide robust parsing, transform handling, and raster output in-process.
+### 7.1 View Picker
 
-## 5. Key trade-offs
+`picker.rs` implements `ViewPicker`, a c4tui-specific component over
+`tui_kit::widgets::grid`. It supports:
 
-### 5.1 Subprocess on load/reload
+- all-view browsing;
+- filtering;
+- key-view hiding/showing;
+- per-view thumbnails;
+- limited subsets for child/detail drill choices.
 
-Cold start is dominated by `structurizr-cli`. Reimplementing Structurizr DSL parsing and layout in Rust would be large scope creep, so c4tui treats the CLI as the authoritative exporter.
+### 7.2 Connection Picker
 
-### 5.2 Kitty-only rendering
+`connection_picker.rs` implements relationship traversal over
+`tui_kit::widgets::grid`. Rows show direction, connected element, relationship
+metadata, and target view.
 
-Sixel and iTerm2 fallback support would add substantial complexity for a weaker experience. c4tui currently detects unsupported terminals and fails clearly rather than shipping degraded rendering.
+### 7.3 Status Bar
 
-### 5.3 Cached rasters, mutable source rectangles
+`statusbar.rs` builds app-specific fragments and delegates width-aware layout
+to `tui_kit::bar::layout_status_line`.
 
-A rendered view's raster is immutable once cached. Pan/zoom is expressed by changing Kitty source-rectangle placement, avoiding retransmission and keeping interaction responsive.
+### 7.4 Log View and Dialogs
 
-### 5.4 Small explicit architecture over a UI framework
+The log view is app-specific because it understands c4tui's in-memory log
+buffer. Help and error dialogs use tui-kit dialog primitives through the
+terminal backend.
 
-The app uses simple internal types (`InputEvent`, `Command`, `AppState`, `RenderFrame`, `TerminalBackend`) instead of a larger TUI framework. This keeps the core behavior easy to test and avoids pulling terminal protocol details into state updates.
+## 8. Terminal Backend
 
-## 6. Security considerations
+`TerminalBackend` defines the imperative boundary:
 
-- Subprocess execution uses argument vectors, not shell strings.
-- Workspace paths come from CLI arguments and should be treated as untrusted file inputs.
-- Workspace themes or remote references are not fetched by c4tui itself.
-- No telemetry and no background update checks.
+- canvas metrics;
+- key translation;
+- render active frame;
+- draw/close picker modals;
+- draw/close log view;
+- show help and error dialogs;
+- clear image cache;
+- teardown image viewports.
 
-## 7. Distribution
+`TerminalSession` implements the trait using `tui_kit::terminal::Terminal`,
+`tui_kit::image`, and `tui_kit::widgets::image_viewport`.
 
-- `cargo install c4tui`
-- Homebrew tap: `brew install scshafe/tap/c4tui`
-- GitHub Releases with macOS arm64/amd64 and Linux arm64/amd64 archives
+Tests use `FakeTerminalBackend` to assert render calls, picker lifecycle, and
+modal behavior without entering raw mode.
 
+## 9. Event Loop
+
+`app.rs` owns the foreground loop:
+
+1. Receive `tui_kit::events::AppEvent`.
+2. Route input by active focus scope.
+3. Convert low-level input to a `PendingCommand` through `keymap.rs`.
+4. Resolve canvas-dependent commands.
+5. Apply command to `AppState`.
+6. Perform any returned effect.
+7. Render or redraw the active modal.
+
+Focus scopes distinguish root diagram mode, picker modal, connection picker
+modal, log modal, and dialogs.
+
+## 10. Background Rendering and Watching
+
+`render_pool.rs` specializes `tui_kit::scheduler::Scheduler` for view rendering
+priority. Hover/selection previews can request render work without blocking the
+foreground input path.
+
+The workspace watcher uses `tui_kit::watcher` when enabled in config. Reload
+itself still flows through `Effect::ReloadWorkspace` so the state transition is
+testable.
+
+## 11. Testing Strategy
+
+Tests avoid a real terminal. Coverage is organized around:
+
+- workspace metadata parsing and relationship indexes;
+- SVG bbox extraction, transforms, raster budget, and crop behavior;
+- `ViewStore` navigation candidate queries;
+- `AppState` command/effect transitions;
+- picker and connection picker rendering/keyboard behavior;
+- terminal backend call sequencing through `FakeTerminalBackend`;
+- status bar truncation and contextual hints.
+
+Manual smoke testing is still required for Kitty graphics behavior in a real
+terminal, especially after changes to image placement, source cropping, or
+terminal capability setup.
+
+## 12. Security and Reliability
+
+- Structurizr is invoked with argument vectors, not shell strings.
+- Workspace files are treated as untrusted inputs.
+- c4tui itself does not fetch remote themes; unresolved remote references are
+  surfaced through Structurizr errors.
+- Logs are written to the configured log file and in-memory buffer, not stderr
+  while the alternate-screen UI is active.
+- Terminal cleanup is owned by tui-kit terminal drop behavior.
+
+## 13. Distribution
+
+c4tui can be installed through Cargo, Homebrew, or GitHub release artifacts.
 Release automation is documented in [docs/releasing.md](./docs/releasing.md).

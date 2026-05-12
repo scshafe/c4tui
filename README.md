@@ -1,10 +1,10 @@
 # c4tui
 
-Interactive terminal viewer for Structurizr C4 diagrams. Click-to-drill navigation across views, rendered via the Kitty graphics protocol.
+Interactive terminal viewer for Structurizr C4 diagrams. It renders workspace views with the Kitty graphics protocol and provides keyboard-oriented navigation across related diagrams.
 
 ## Status
 
-Pre-alpha moving toward v1. Phases 0–6 are implemented, and the architecture hardening pass is complete: the binary detects terminal capabilities, exports/rasterizes Structurizr SVG views, displays them with Kitty graphics, provides a keyboard view picker with per-view image caching, supports pan/zoom via Kitty source rectangles, click-to-drill navigation, reload, help, config, and file logging. See [implementation-plan.md](./implementation-plan.md) for the phased roadmap.
+Pre-alpha moving toward v1. Phases 0-6 are implemented, and the architecture hardening pass is complete: the binary detects terminal capabilities, exports/rasterizes Structurizr SVG views, displays them with Kitty graphics, provides a keyboard view picker with per-view image caching, supports pan/zoom via Kitty source rectangles, optional mouse drill, relationship traversal through a connection picker, reload, help, config, and file logging. The next navigation direction is a keyboard-first link directory for immediately reachable diagrams. See [implementation-plan.md](./implementation-plan.md) for the phased roadmap.
 
 ## Install
 
@@ -36,7 +36,7 @@ GitHub Releases include prebuilt archives for macOS arm64, macOS amd64, Linux am
 cargo run -- --workspace ./workspace.dsl
 ```
 
-With `--workspace`, c4tui exports the workspace to SVG with the `structurizr` CLI (resolved from `PATH`), renders the first exported view inline, opens a view picker with `o`, switches views with Up/Down + Enter, pans with arrow keys or mouse drag, zooms with `+`/`-` or the mouse wheel, resets fit with `0`/`f`, drills into child views by clicking diagram elements, goes back with Backspace, reloads the workspace with `r`, shows help with `?`, opens the in-app log viewer with `L`, and exits with `q`. Without `--workspace`, it only probes terminal capabilities and exits. It returns non-zero when Kitty graphics support is unavailable, because inline image rendering requires it.
+With `--workspace`, c4tui exports the workspace to SVG with the `structurizr` CLI (resolved from `PATH`), renders the first exported view inline, opens a view picker with `o`, switches views with Up/Down + Enter, pans with arrow keys or mouse drag, zooms with `+`/`-` or the mouse wheel, resets fit with `0`/`f`, optionally drills into related child views by clicking diagram elements, opens relationship links with Enter when an element is pinned/selected, goes back with Backspace, reloads the workspace with `r`, shows help with `?`, opens the in-app log viewer with `L`, and exits with `q`. Without `--workspace`, it only probes terminal capabilities and exits. It returns non-zero when Kitty graphics support is unavailable, because inline image rendering requires it.
 
 Useful flags:
 
@@ -134,7 +134,7 @@ overflow = "crop"
 
 ## What it does (intended)
 
-Open a Structurizr workspace (`workspace.dsl` or `workspace.json`) and browse its views from a terminal. Each view is rendered as a high-DPI raster image, displayed inline via the Kitty graphics protocol. Clicking on an element that has a child view (e.g., a Container in a System Context view) navigates into the corresponding view, mirroring the C4 navigation experience from the official Structurizr web UI — but inside your terminal, in a single static binary, with no daemon.
+Open a Structurizr workspace (`workspace.dsl` or `workspace.json`) and browse its views from a terminal. Each view is rendered as a high-DPI raster image, displayed inline via the Kitty graphics protocol. c4tui indexes view metadata and relationships from `workspace.json` so related diagrams can be traversed without running Structurizr Local in a browser.
 
 ## Why
 
@@ -143,7 +143,7 @@ Structurizr Lite/Local is an excellent local-first browser for C4 diagrams, but 
 ## Requirements
 
 - A terminal that supports the **Kitty graphics protocol** (Kitty, WezTerm, Ghostty)
-- A terminal that supports **SGR pixel mouse mode** (CSI 1016) for click-to-drill
+- A terminal that supports **SGR pixel mouse mode** (CSI 1016) for optional mouse drill, drag, and wheel interactions
 - True color (24-bit)
 - A reachable `structurizr` binary on `PATH` (the upstream Structurizr CLI from <https://github.com/structurizr/structurizr>; see notes below)
 - Read access to a Structurizr workspace file
