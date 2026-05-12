@@ -74,17 +74,27 @@ const THUMB_ROWS: u16 = 5;
 
 impl ViewPicker {
     pub fn new(views: &[ViewInfo], model: &WorkspaceModel, current: ViewId) -> Self {
-        let items = views
+        let view_ids = (0..views.len()).map(ViewId::new).collect::<Vec<_>>();
+        Self::new_for_view_ids(views, model, &view_ids, current)
+    }
+
+    pub fn new_for_view_ids(
+        views: &[ViewInfo],
+        model: &WorkspaceModel,
+        view_ids: &[ViewId],
+        current: ViewId,
+    ) -> Self {
+        let items = view_ids
             .iter()
-            .enumerate()
-            .map(|(idx, info)| {
+            .filter_map(|view_id| views.get(view_id.index()).map(|info| (*view_id, info)))
+            .map(|(view_id, info)| {
                 let element_names = info
                     .element_ids
                     .iter()
                     .filter_map(|id| model.elements.get(id).map(|e| e.name.clone()))
                     .collect();
                 PickerItem {
-                    view_id: ViewId::new(idx),
+                    view_id,
                     kind: info.kind,
                     name: info.name.clone(),
                     key: info.key.clone(),
@@ -555,7 +565,7 @@ mod tests {
             description: None,
             svg_path: PathBuf::from(format!("{key}.svg")),
             element_ids: HashSet::new(),
-            child_view_by_element_id: HashMap::new(),
+            child_view_keys_by_element_id: HashMap::new(),
             primary_view_key: None,
             key_view_key: None,
         }
@@ -633,6 +643,24 @@ mod tests {
             picker.handle_key(Key::Char(c));
         }
         let outcome = picker.handle_key(Key::Enter);
+        match outcome {
+            PickerOutcome::Select(id) => assert_eq!(id, ViewId::new(3)),
+            _ => panic!("expected select"),
+        }
+    }
+
+    #[test]
+    fn limited_picker_preserves_original_view_ids() {
+        let mut picker = ViewPicker::new_for_view_ids(
+            &views(),
+            &WorkspaceModel::default(),
+            &[ViewId::new(1), ViewId::new(3)],
+            ViewId::new(1),
+        );
+
+        picker.handle_key(Key::Down);
+        let outcome = picker.handle_key(Key::Enter);
+
         match outcome {
             PickerOutcome::Select(id) => assert_eq!(id, ViewId::new(3)),
             _ => panic!("expected select"),

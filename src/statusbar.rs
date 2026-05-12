@@ -422,7 +422,7 @@ mod tests {
             description: None,
             svg_path: std::path::PathBuf::from("containers.svg"),
             element_ids: std::collections::HashSet::new(),
-            child_view_by_element_id: std::collections::HashMap::new(),
+            child_view_keys_by_element_id: std::collections::HashMap::new(),
             primary_view_key: None,
             key_view_key: None,
         }

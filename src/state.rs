@@ -62,6 +62,9 @@ impl AppState {
                 self.breadcrumbs.clear();
                 self.pinned_element = None;
             }
+            Command::SelectChildView(next) => {
+                self.navigate_child_view(next);
+            }
             Command::Reload => {
                 result.effect = Some(Effect::ReloadWorkspace);
                 result.render = false;
@@ -119,16 +122,26 @@ impl AppState {
                 self.pinned_element = None;
             }
             Command::DrillAt { canvas_x, canvas_y } => {
-                if let Some(child) =
-                    store.child_view_at_canvas_point(self.current, canvas_x, canvas_y, canvas)?
-                {
-                    self.breadcrumbs.push(self.current);
-                    self.current = child;
-                    self.last_drag = None;
-                } else if let Some(element) =
+                if let Some(element) =
                     store.element_at_canvas_point(self.current, canvas_x, canvas_y, canvas)?
                 {
-                    self.pinned_element = Some(element);
+                    match store
+                        .child_view_ids_for_element(self.current, &element)
+                        .as_slice()
+                    {
+                        [] => {
+                            self.pinned_element = Some(element);
+                        }
+                        [child] => {
+                            self.navigate_child_view(*child);
+                        }
+                        children => {
+                            result.effect = Some(Effect::OpenChildViewPicker {
+                                target_view_ids: children.to_vec(),
+                            });
+                            result.render = false;
+                        }
+                    }
                 } else {
                     result.render = false;
                 }
@@ -208,6 +221,13 @@ impl AppState {
         self.current = candidate.view_id;
         self.last_drag = None;
         self.pinned_element = Some(candidate.connected_element_id);
+    }
+
+    fn navigate_child_view(&mut self, next: ViewId) {
+        self.breadcrumbs.push(self.current);
+        self.current = next;
+        self.last_drag = None;
+        self.pinned_element = None;
     }
 
     fn reset_navigation(&mut self) {
@@ -349,6 +369,7 @@ pub struct UpdateResult {
 pub enum Effect {
     Quit,
     OpenPicker,
+    OpenChildViewPicker { target_view_ids: Vec<ViewId> },
     OpenConnectionPicker { source_element_id: ElementId },
     ReloadWorkspace,
     ClearImageCache,
@@ -411,8 +432,8 @@ mod tests {
         .unwrap();
         fs::write(&child_svg, r#"<svg width="100" height="100" />"#).unwrap();
 
-        let mut child_view_by_element_id = HashMap::new();
-        child_view_by_element_id.insert(ElementId::new("1"), "child".to_owned());
+        let mut child_view_keys_by_element_id = HashMap::new();
+        child_view_keys_by_element_id.insert(ElementId::new("1"), vec!["child".to_owned()]);
 
         ViewStore::new(
             vec![
@@ -423,7 +444,7 @@ mod tests {
                     description: None,
                     svg_path: parent_svg,
                     element_ids: HashSet::from([ElementId::new("1")]),
-                    child_view_by_element_id,
+                    child_view_keys_by_element_id,
                     primary_view_key: None,
                     key_view_key: None,
                 },
@@ -434,7 +455,7 @@ mod tests {
                     description: None,
                     svg_path: child_svg,
                     element_ids: HashSet::new(),
-                    child_view_by_element_id: HashMap::new(),
+                    child_view_keys_by_element_id: HashMap::new(),
                     primary_view_key: None,
                     key_view_key: None,
                 },
@@ -453,7 +474,7 @@ mod tests {
                 description: None,
                 svg_path: std::path::PathBuf::from("api.svg"),
                 element_ids: HashSet::from([ElementId::new("api")]),
-                child_view_by_element_id: HashMap::new(),
+                child_view_keys_by_element_id: HashMap::new(),
                 primary_view_key: None,
                 key_view_key: None,
             },
@@ -464,7 +485,7 @@ mod tests {
                 description: None,
                 svg_path: std::path::PathBuf::from("database.svg"),
                 element_ids: HashSet::from([ElementId::new("database")]),
-                child_view_by_element_id: HashMap::new(),
+                child_view_keys_by_element_id: HashMap::new(),
                 primary_view_key: None,
                 key_view_key: None,
             },

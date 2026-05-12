@@ -111,6 +111,7 @@ pub enum Command {
     Quit,
     OpenPicker,
     SelectView(ViewId),
+    SelectChildView(ViewId),
     Reload,
     ReloadSucceeded,
     ReloadFailed,

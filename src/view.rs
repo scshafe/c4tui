@@ -374,6 +374,7 @@ impl ViewStore {
         self.transforms.insert(id, transform_from_widget(widget));
     }
 
+    #[cfg(test)]
     pub fn child_view_at_canvas_point(
         &mut self,
         id: ViewId,
@@ -381,9 +382,23 @@ impl ViewStore {
         canvas_y: f32,
         canvas: CanvasMetrics,
     ) -> Result<Option<ViewId>> {
+        Ok(self
+            .child_views_at_canvas_point(id, canvas_x, canvas_y, canvas)?
+            .into_iter()
+            .next())
+    }
+
+    #[cfg(test)]
+    pub fn child_views_at_canvas_point(
+        &mut self,
+        id: ViewId,
+        canvas_x: f32,
+        canvas_y: f32,
+        canvas: CanvasMetrics,
+    ) -> Result<Vec<ViewId>> {
         let image_point = self.image_point_at_canvas(id, canvas_x, canvas_y, canvas)?;
         if !image_point.inside {
-            return Ok(None);
+            return Ok(Vec::new());
         }
         let rendered = self.rendered_view(id)?;
         let hit_element = rendered
@@ -394,20 +409,28 @@ impl ViewStore {
             .map(|bbox| bbox.element_id.clone());
 
         let Some(hit_element) = hit_element else {
-            return Ok(None);
+            return Ok(Vec::new());
         };
-        let Some(child_key) = self.views[id.index()]
-            .child_view_by_element_id
-            .get(&hit_element)
-        else {
-            return Ok(None);
-        };
+        Ok(self.child_view_ids_for_element(id, &hit_element))
+    }
 
-        Ok(self
-            .views
-            .iter()
-            .position(|view| &view.key == child_key)
-            .map(ViewId::new))
+    pub fn child_view_ids_for_element(
+        &self,
+        current: ViewId,
+        element_id: &ElementId,
+    ) -> Vec<ViewId> {
+        self.views[current.index()]
+            .child_view_keys_by_element_id
+            .get(element_id)
+            .into_iter()
+            .flatten()
+            .filter_map(|child_key| {
+                self.views
+                    .iter()
+                    .position(|view| &view.key == child_key)
+                    .map(ViewId::new)
+            })
+            .collect()
     }
 }
 
@@ -564,7 +587,7 @@ mod tests {
             description: None,
             svg_path: std::path::PathBuf::from("unused.svg"),
             element_ids: std::collections::HashSet::new(),
-            child_view_by_element_id: std::collections::HashMap::new(),
+            child_view_keys_by_element_id: std::collections::HashMap::new(),
             primary_view_key: None,
             key_view_key: None,
         }
@@ -578,7 +601,7 @@ mod tests {
             description: None,
             svg_path: std::path::PathBuf::from(format!("{key}.svg")),
             element_ids: ids.iter().copied().map(ElementId::new).collect(),
-            child_view_by_element_id: HashMap::new(),
+            child_view_keys_by_element_id: HashMap::new(),
             primary_view_key: None,
             key_view_key: None,
         }
@@ -627,7 +650,7 @@ mod tests {
                 description: None,
                 svg_path: svg,
                 element_ids: std::collections::HashSet::new(),
-                child_view_by_element_id: std::collections::HashMap::new(),
+                child_view_keys_by_element_id: std::collections::HashMap::new(),
                 primary_view_key: None,
                 key_view_key: None,
             }],
@@ -743,8 +766,9 @@ mod tests {
         )
         .unwrap();
         fs::write(&child_svg, r#"<svg width="100" height="100" />"#).unwrap();
-        let mut child_view_by_element_id = std::collections::HashMap::new();
-        child_view_by_element_id.insert(crate::ids::ElementId::new("1"), "child".to_owned());
+        let mut child_view_keys_by_element_id = std::collections::HashMap::new();
+        child_view_keys_by_element_id
+            .insert(crate::ids::ElementId::new("1"), vec!["child".to_owned()]);
         let mut store = ViewStore::new(
             vec![
                 ViewInfo {
@@ -754,7 +778,7 @@ mod tests {
                     description: None,
                     svg_path: parent_svg,
                     element_ids: std::collections::HashSet::from([crate::ids::ElementId::new("1")]),
-                    child_view_by_element_id,
+                    child_view_keys_by_element_id,
                     primary_view_key: None,
                     key_view_key: None,
                 },
@@ -765,7 +789,7 @@ mod tests {
                     description: None,
                     svg_path: child_svg,
                     element_ids: std::collections::HashSet::new(),
-                    child_view_by_element_id: std::collections::HashMap::new(),
+                    child_view_keys_by_element_id: std::collections::HashMap::new(),
                     primary_view_key: None,
                     key_view_key: None,
                 },

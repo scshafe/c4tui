@@ -37,6 +37,13 @@ const SCOPE_LOG: &str = "log";
 struct PickerSlot {
     picker: Cached<ViewPicker>,
     last_hover: ViewId,
+    action: PickerAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PickerAction {
+    SelectView,
+    Drill,
 }
 
 #[derive(Debug)]
@@ -395,11 +402,19 @@ impl App {
             }
             PickerOutcome::Select(view_id) => {
                 terminal.close_picker(&self.store)?;
+                let action = self
+                    .picker_slot
+                    .as_ref()
+                    .map(|slot| slot.action)
+                    .unwrap_or(PickerAction::SelectView);
                 self.picker_slot = None;
                 self.focus.pop_scope();
                 let canvas = terminal.canvas_metrics();
-                self.state
-                    .apply(Command::SelectView(view_id), &mut self.store, canvas)?;
+                let command = match action {
+                    PickerAction::SelectView => Command::SelectView(view_id),
+                    PickerAction::Drill => Command::SelectChildView(view_id),
+                };
+                self.state.apply(command, &mut self.store, canvas)?;
                 self.request_active_render();
                 terminal.render(&self.frame_with_progress(), &mut self.store)?;
                 Ok(())
@@ -479,6 +494,42 @@ impl App {
                 self.picker_slot = Some(PickerSlot {
                     picker: Cached::new(picker_inner),
                     last_hover,
+                    action: PickerAction::SelectView,
+                });
+                if let Some(slot) = self.picker_slot.as_mut() {
+                    terminal.draw_picker(&mut slot.picker, &self.store)?;
+                }
+            }
+            Some(Effect::OpenChildViewPicker { target_view_ids }) => {
+                let current = self.state.current();
+                terminal.teardown_image_viewport(current)?;
+                let picker_inner = ViewPicker::new_for_view_ids(
+                    &self.store.views,
+                    &self.store.model,
+                    &target_view_ids,
+                    target_view_ids.first().copied().unwrap_or(current),
+                );
+                let last_hover = picker_inner.selected_view_id();
+                if !self.store.has_rendered(last_hover) {
+                    let path = self.store.view(last_hover).svg_path.clone();
+                    self.scheduler.request(
+                        last_hover,
+                        RenderPriority::Hover,
+                        path,
+                        self.store.budget(),
+                    );
+                }
+                self.focus
+                    .push_scope(
+                        SCOPE_PICKER,
+                        FocusScopeKind::Modal,
+                        vec![FocusNode::new("picker-list")],
+                    )
+                    .expect("picker scope is well-formed");
+                self.picker_slot = Some(PickerSlot {
+                    picker: Cached::new(picker_inner),
+                    last_hover,
+                    action: PickerAction::Drill,
                 });
                 if let Some(slot) = self.picker_slot.as_mut() {
                     terminal.draw_picker(&mut slot.picker, &self.store)?;
@@ -663,7 +714,7 @@ mod tests {
                 description: None,
                 svg_path: parent,
                 element_ids: HashSet::new(),
-                child_view_by_element_id: HashMap::new(),
+                child_view_keys_by_element_id: HashMap::new(),
                 primary_view_key: None,
                 key_view_key: None,
             },
@@ -674,7 +725,7 @@ mod tests {
                 description: None,
                 svg_path: child,
                 element_ids: HashSet::new(),
-                child_view_by_element_id: HashMap::new(),
+                child_view_keys_by_element_id: HashMap::new(),
                 primary_view_key: None,
                 key_view_key: None,
             },
@@ -716,7 +767,7 @@ mod tests {
                 description: None,
                 svg_path: api_svg,
                 element_ids: HashSet::from([ElementId::new("api")]),
-                child_view_by_element_id: HashMap::new(),
+                child_view_keys_by_element_id: HashMap::new(),
                 primary_view_key: None,
                 key_view_key: None,
             },
@@ -727,7 +778,7 @@ mod tests {
                 description: None,
                 svg_path: database_svg,
                 element_ids: HashSet::from([ElementId::new("database")]),
-                child_view_by_element_id: HashMap::new(),
+                child_view_keys_by_element_id: HashMap::new(),
                 primary_view_key: None,
                 key_view_key: None,
             },
@@ -777,6 +828,77 @@ mod tests {
             Box::new(crate::clipboard::DefaultClipboard);
         App::new(
             ViewStore::new(views, budget()).unwrap().with_model(model),
+            WorkspaceSource {
+                path: PathBuf::from("workspace.dsl"),
+            },
+            "svg".to_owned(),
+            AppConfig::default(),
+            sink,
+            log_buffer,
+            clipboard,
+        )
+    }
+
+    fn test_app_with_related_view_svgs(dir: &std::path::Path, sink: AppEventSender) -> App {
+        let parent_svg = dir.join("system.svg");
+        let containers_svg = dir.join("containers.svg");
+        let flow_svg = dir.join("flow.svg");
+        std::fs::write(
+            &parent_svg,
+            r#"<svg width="100" height="100"><g id="system"><rect x="10" y="10" width="80" height="80"/></g></svg>"#,
+        )
+        .unwrap();
+        std::fs::write(&containers_svg, r#"<svg width="100" height="100"/>"#).unwrap();
+        std::fs::write(&flow_svg, r#"<svg width="100" height="100"/>"#).unwrap();
+
+        let mut related = HashMap::new();
+        related.insert(
+            ElementId::new("system"),
+            vec!["containers".to_owned(), "flow".to_owned()],
+        );
+        let views = vec![
+            ViewInfo {
+                key: "system".to_owned(),
+                name: "System Context".to_owned(),
+                kind: crate::workspace::ViewKind::SystemContext,
+                description: None,
+                svg_path: parent_svg,
+                element_ids: HashSet::from([ElementId::new("system")]),
+                child_view_keys_by_element_id: related,
+                primary_view_key: None,
+                key_view_key: None,
+            },
+            ViewInfo {
+                key: "containers".to_owned(),
+                name: "Containers".to_owned(),
+                kind: crate::workspace::ViewKind::Container,
+                description: None,
+                svg_path: containers_svg,
+                element_ids: HashSet::new(),
+                child_view_keys_by_element_id: HashMap::new(),
+                primary_view_key: None,
+                key_view_key: None,
+            },
+            ViewInfo {
+                key: "flow".to_owned(),
+                name: "Flow".to_owned(),
+                kind: crate::workspace::ViewKind::Dynamic,
+                description: None,
+                svg_path: flow_svg,
+                element_ids: HashSet::new(),
+                child_view_keys_by_element_id: HashMap::new(),
+                primary_view_key: None,
+                key_view_key: None,
+            },
+        ];
+
+        let log_buffer = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::logger::LogBuffer::with_capacity(64),
+        ));
+        let clipboard: Box<dyn crate::clipboard::Clipboard> =
+            Box::new(crate::clipboard::DefaultClipboard);
+        App::new(
+            ViewStore::new(views, budget()).unwrap(),
             WorkspaceSource {
                 path: PathBuf::from("workspace.dsl"),
             },
@@ -844,6 +966,68 @@ mod tests {
             terminal.calls,
             vec![
                 FakeTerminalCall::Render(ViewId::first()),
+                FakeTerminalCall::TeardownImageViewport(ViewId::first()),
+                FakeTerminalCall::DrawPicker,
+                FakeTerminalCall::ClosePicker,
+                FakeTerminalCall::Render(ViewId::first()),
+            ]
+        );
+    }
+
+    #[test]
+    fn click_on_element_with_multiple_related_views_opens_picker_and_drills() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, _rx) = mpsc::channel();
+        let mut app = test_app_with_related_view_svgs(dir.path(), tx);
+        let mut terminal = FakeTerminalBackend::new();
+
+        app.handle_input(
+            InputEvent::MouseClick {
+                canvas_x: 0.5,
+                canvas_y: 0.5,
+            },
+            &mut terminal,
+        )
+        .unwrap();
+        app.handle_key(Key::Down, &mut terminal).unwrap();
+        app.handle_key(Key::Enter, &mut terminal).unwrap();
+
+        assert_eq!(app.state.current(), ViewId::new(2));
+        assert_eq!(app.state.render_frame().breadcrumbs, &[ViewId::first()]);
+        assert_eq!(
+            terminal.calls,
+            vec![
+                FakeTerminalCall::TeardownImageViewport(ViewId::first()),
+                FakeTerminalCall::DrawPicker,
+                FakeTerminalCall::DrawPicker,
+                FakeTerminalCall::ClosePicker,
+                FakeTerminalCall::Render(ViewId::new(2)),
+            ]
+        );
+    }
+
+    #[test]
+    fn related_view_picker_cancel_preserves_current_view() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, _rx) = mpsc::channel();
+        let mut app = test_app_with_related_view_svgs(dir.path(), tx);
+        let mut terminal = FakeTerminalBackend::new();
+
+        app.handle_input(
+            InputEvent::MouseClick {
+                canvas_x: 0.5,
+                canvas_y: 0.5,
+            },
+            &mut terminal,
+        )
+        .unwrap();
+        app.handle_key(Key::Esc, &mut terminal).unwrap();
+
+        assert_eq!(app.state.current(), ViewId::first());
+        assert!(app.state.render_frame().breadcrumbs.is_empty());
+        assert_eq!(
+            terminal.calls,
+            vec![
                 FakeTerminalCall::TeardownImageViewport(ViewId::first()),
                 FakeTerminalCall::DrawPicker,
                 FakeTerminalCall::ClosePicker,

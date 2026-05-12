@@ -543,7 +543,7 @@ mod tests {
             description: None,
             svg_path: PathBuf::from(format!("{key}.svg")),
             element_ids: elements.iter().map(|id| ElementId::new(*id)).collect(),
-            child_view_by_element_id: HashMap::new(),
+            child_view_keys_by_element_id: HashMap::new(),
             primary_view_key: None,
             key_view_key: None,
         }
