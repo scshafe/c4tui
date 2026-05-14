@@ -66,9 +66,7 @@ The connection-picker footer hint also changed character set from ASCII `->` to 
 Plans for this work currently live in **tui-kit's repo**:
 
 - **Strategic operational plan:** `/Users/coleshaffer/Projects/tui-kit/docs/superpowers/plans/2026-05-14-revised-library-author-implementation-plan.md`. Phase F is the c4tui validation track.
-- **Per-phase detailed plan (older joint sequence):** `/Users/coleshaffer/Projects/tui-kit/docs/superpowers/plans/2026-05-12-phase-3-navpicker-modal-image-elements.md`. This is the plan whose Tasks 1–4 just landed. Tasks 5–8 (Modal unification, terminal-backend collapse, image-widget winner, elements decision) describe what's next.
-
-This cross-repo plan placement is a known imperfection. A future cleanup may move the c4tui-primary plan into this repo.
+- **Per-phase detailed plan (older joint sequence):** `docs/superpowers/plans/2026-05-12-phase-3-navpicker-modal-image-elements.md` (this repo). This is the plan whose Tasks 1–4 just landed. Tasks 5–8 (Modal unification, terminal-backend collapse, image-widget winner, elements decision) describe what's next.
 
 ## What's next for c4tui
 
@@ -95,8 +93,8 @@ cd /Users/coleshaffer/Projects/c4tui
 git pull
 # Read the operational plan in tui-kit's repo:
 cat /Users/coleshaffer/Projects/tui-kit/docs/superpowers/plans/2026-05-14-revised-library-author-implementation-plan.md
-# And the Phase 3 detailed plan (Tasks 5–8 are the next chunk of c4tui work):
-cat /Users/coleshaffer/Projects/tui-kit/docs/superpowers/plans/2026-05-12-phase-3-navpicker-modal-image-elements.md
+# And the Phase 3 detailed plan (lives here in c4tui; Tasks 5–8 are the next chunk):
+cat docs/superpowers/plans/2026-05-12-phase-3-navpicker-modal-image-elements.md
 ```
 
 The Phase 3 plan's Task 5 (Modal trait + ActiveModal) is the natural next sub-task: it unifies the slot infrastructure that Tasks 2–4 left as two parallel fields (`picker_slot`, `connection_picker_slot`), and it folds `LogView` under the same abstraction.
