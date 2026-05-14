@@ -3,7 +3,8 @@ use crate::config::{AppConfig, KeyBindings};
 use crate::connection_picker::ConnectionPicker;
 use crate::ids::{ElementId, ViewId};
 use crate::log_view::LogView;
-use crate::picker::ViewPicker;
+use crate::nav_items::ViewNavItem;
+use crate::nav_picker::NavPicker;
 use crate::state::RenderFrame;
 use crate::statusbar::{default_footer_bar, default_status_bar, StatusBar, StatusContext};
 use crate::view::{image_id_for_view, ViewStore};
@@ -174,7 +175,7 @@ impl TerminalSession {
 
     pub fn draw_picker(
         &mut self,
-        picker: &mut Cached<ViewPicker>,
+        picker: &mut Cached<NavPicker<ViewNavItem>>,
         store: &ViewStore,
     ) -> Result<()> {
         let mut render_result: Result<()> = Ok(());
@@ -184,7 +185,19 @@ impl TerminalSession {
         })?;
         render_result?;
 
-        let thumbs = picker.inner().thumbnails().to_vec();
+        let thumbs: Vec<crate::picker::ThumbnailCellArea> = picker
+            .inner()
+            .last_artifacts()
+            .iter()
+            .map(|artifact| match artifact {
+                crate::nav_picker::NavRenderArtifact::Thumbnail { id, area } => {
+                    crate::picker::ThumbnailCellArea {
+                        view_id: id.view_id(),
+                        area: *area,
+                    }
+                }
+            })
+            .collect();
         let placements_to_clear: Vec<(u32, u32)> = (0..store.views.len())
             .map(|index| {
                 (
@@ -337,7 +350,11 @@ impl TerminalBackend for TerminalSession {
         Self::teardown_image_viewport(self, view_id)
     }
 
-    fn draw_picker(&mut self, picker: &mut Cached<ViewPicker>, store: &ViewStore) -> Result<()> {
+    fn draw_picker(
+        &mut self,
+        picker: &mut Cached<NavPicker<ViewNavItem>>,
+        store: &ViewStore,
+    ) -> Result<()> {
         Self::draw_picker(self, picker, store)
     }
 

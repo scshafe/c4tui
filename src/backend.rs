@@ -2,7 +2,8 @@ use crate::config::KeyBindings;
 use crate::connection_picker::ConnectionPicker;
 use crate::ids::ViewId;
 use crate::log_view::LogView;
-use crate::picker::ViewPicker;
+use crate::nav_items::ViewNavItem;
+use crate::nav_picker::NavPicker;
 use crate::state::RenderFrame;
 use crate::view::ViewStore;
 use anyhow::Result;
@@ -13,7 +14,11 @@ pub trait TerminalBackend {
     fn canvas_metrics(&self) -> CanvasMetrics;
     fn render(&mut self, frame: &RenderFrame, store: &mut ViewStore) -> Result<()>;
     fn teardown_image_viewport(&mut self, view_id: ViewId) -> Result<()>;
-    fn draw_picker(&mut self, picker: &mut Cached<ViewPicker>, store: &ViewStore) -> Result<()>;
+    fn draw_picker(
+        &mut self,
+        picker: &mut Cached<NavPicker<ViewNavItem>>,
+        store: &ViewStore,
+    ) -> Result<()>;
     fn close_picker(&mut self, store: &ViewStore) -> Result<()>;
     fn draw_connection_picker(&mut self, picker: &mut Cached<ConnectionPicker>) -> Result<()>;
     fn close_connection_picker(&mut self) -> Result<()>;
@@ -97,7 +102,7 @@ pub mod fake {
 
         fn draw_picker(
             &mut self,
-            _picker: &mut Cached<ViewPicker>,
+            _picker: &mut Cached<NavPicker<ViewNavItem>>,
             _store: &ViewStore,
         ) -> Result<()> {
             self.calls.push(FakeTerminalCall::DrawPicker);

@@ -7,7 +7,8 @@ use crate::ids::ViewId;
 use crate::keymap::{KeyMap, KeyMapExt};
 use crate::log_view::{LogView, LogViewOutcome};
 use crate::logger::SharedLogBuffer;
-use crate::picker::{PickerOutcome, ViewPicker};
+use crate::nav_items::ViewNavItem;
+use crate::nav_picker::{NavOutcome, NavPicker, NavPickerConfig, NavPickerMode};
 use crate::render_pool::{RenderPriority, RenderScheduler};
 use crate::state::{AppState, Effect};
 use crate::view::{diagram_placement_policy, ViewStore};
@@ -34,7 +35,7 @@ const SCOPE_LOG: &str = "log";
 
 #[derive(Debug)]
 struct PickerSlot {
-    picker: Cached<ViewPicker>,
+    picker: Cached<NavPicker<ViewNavItem>>,
     last_hover: ViewId,
     action: PickerAction,
 }
@@ -407,9 +408,14 @@ impl App {
             };
             let outcome = match slot.picker.handle_event(&key)? {
                 ComponentOutcome::Message(m) => m,
-                _ => PickerOutcome::Continue,
+                _ => NavOutcome::Continue,
             };
-            let now = slot.picker.inner().selected_view_id();
+            let now = slot
+                .picker
+                .inner()
+                .selected()
+                .map(|item| item.view_id)
+                .unwrap_or(slot.last_hover);
             if now != slot.last_hover {
                 if !self.store.has_rendered(now) {
                     let path = self.store.view(now).svg_path.clone();
@@ -421,13 +427,13 @@ impl App {
             outcome
         };
         match outcome {
-            PickerOutcome::Continue => {
+            NavOutcome::Continue => {
                 if let Some(slot) = self.picker_slot.as_mut() {
                     terminal.draw_picker(&mut slot.picker, &self.store)?;
                 }
                 Ok(())
             }
-            PickerOutcome::Select(view_id) => {
+            NavOutcome::Select(view_id) => {
                 terminal.close_picker(&self.store)?;
                 let action = self
                     .picker_slot
@@ -446,7 +452,7 @@ impl App {
                 terminal.render(&self.frame_with_progress(), &mut self.store)?;
                 Ok(())
             }
-            PickerOutcome::Cancel => {
+            NavOutcome::Cancel => {
                 terminal.close_picker(&self.store)?;
                 self.picker_slot = None;
                 self.focus.pop_scope();
@@ -498,10 +504,37 @@ impl App {
                 self.quit = true;
             }
             Some(Effect::OpenPicker) => {
+                use tui_kit::component::ComponentId;
+
                 let current = self.state.current();
                 terminal.teardown_image_viewport(current)?;
-                let picker_inner = ViewPicker::new(&self.store.views, &self.store.model, current);
-                let last_hover = picker_inner.selected_view_id();
+                let items = ViewNavItem::collect_all(&self.store.views, &self.store.model);
+                let initial = items
+                    .iter()
+                    .position(|item| item.view_id == current)
+                    .unwrap_or(0);
+                let picker_inner = NavPicker::new(
+                    NavPickerConfig {
+                        id: ComponentId::new("c4tui-view-picker"),
+                        title: " View Picker ".into(),
+                        footer_hint:
+                            " type → filter | Tab → legends | Enter → select | Esc → cancel "
+                                .into(),
+                        default_header: "Pick a view  —  type to filter, Enter to select, Esc to cancel, Tab to toggle key views".into(),
+                        min_cell_cols: 22,
+                        cell_rows: 8,
+                        mode: NavPickerMode::Filterable {
+                            allows_secondary_toggle: true,
+                            secondary_label: "legends",
+                        },
+                    },
+                    items,
+                    initial,
+                );
+                let last_hover = picker_inner
+                    .selected()
+                    .map(|item| item.view_id)
+                    .unwrap_or(current);
                 if !self.store.has_rendered(last_hover) {
                     let path = self.store.view(last_hover).svg_path.clone();
                     self.scheduler.request(
@@ -528,15 +561,42 @@ impl App {
                 }
             }
             Some(Effect::OpenChildViewPicker { target_view_ids }) => {
+                use tui_kit::component::ComponentId;
+
                 let current = self.state.current();
                 terminal.teardown_image_viewport(current)?;
-                let picker_inner = ViewPicker::new_for_view_ids(
+                let items = ViewNavItem::collect_for_view_ids(
                     &self.store.views,
                     &self.store.model,
                     &target_view_ids,
-                    target_view_ids.first().copied().unwrap_or(current),
                 );
-                let last_hover = picker_inner.selected_view_id();
+                let initial_view = target_view_ids.first().copied().unwrap_or(current);
+                let initial = items
+                    .iter()
+                    .position(|item| item.view_id == initial_view)
+                    .unwrap_or(0);
+                let picker_inner = NavPicker::new(
+                    NavPickerConfig {
+                        id: ComponentId::new("c4tui-child-view-picker"),
+                        title: " View Picker ".into(),
+                        footer_hint:
+                            " type → filter | Tab → legends | Enter → select | Esc → cancel "
+                                .into(),
+                        default_header: "Pick a view  —  type to filter, Enter to select, Esc to cancel, Tab to toggle key views".into(),
+                        min_cell_cols: 22,
+                        cell_rows: 8,
+                        mode: NavPickerMode::Filterable {
+                            allows_secondary_toggle: true,
+                            secondary_label: "legends",
+                        },
+                    },
+                    items,
+                    initial,
+                );
+                let last_hover = picker_inner
+                    .selected()
+                    .map(|item| item.view_id)
+                    .unwrap_or(initial_view);
                 if !self.store.has_rendered(last_hover) {
                     let path = self.store.view(last_hover).svg_path.clone();
                     self.scheduler.request(
