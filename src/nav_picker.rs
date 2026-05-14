@@ -104,6 +104,21 @@ pub enum NavRenderArtifact {
     Thumbnail { id: ThumbnailId, area: CellArea },
 }
 
+/// A resolved thumbnail-anchor: the `ViewId` whose rendered image should be
+/// placed in `area` on the next `draw_picker` flush. Produced by the
+/// terminal layer when it walks `NavPicker::last_artifacts()` and resolves
+/// each `NavRenderArtifact::Thumbnail` to the view it belongs to.
+///
+/// Lived in `picker.rs` before Task 4 of the Phase F NavPicker refactor;
+/// moved here when `picker.rs` was deleted so that the only consumer
+/// (`terminal::draw_picker`) and the only producer (`NavPicker`) sit in
+/// neighboring modules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThumbnailCellArea {
+    pub view_id: crate::ids::ViewId,
+    pub area: CellArea,
+}
+
 /// What the thumbnail belongs to. Today only views have thumbnails, but
 /// we use an opaque newtype so a future Phase 5 `LinkCandidate` could grow
 /// one without retouching this trait.

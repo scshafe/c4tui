@@ -1,9 +1,8 @@
 use crate::backend::TerminalBackend;
 use crate::config::{AppConfig, KeyBindings};
-use crate::connection_picker::ConnectionPicker;
 use crate::ids::{ElementId, ViewId};
 use crate::log_view::LogView;
-use crate::nav_items::ViewNavItem;
+use crate::nav_items::{ConnectionNavItem, ViewNavItem};
 use crate::nav_picker::NavPicker;
 use crate::state::RenderFrame;
 use crate::statusbar::{default_footer_bar, default_status_bar, StatusBar, StatusContext};
@@ -185,13 +184,13 @@ impl TerminalSession {
         })?;
         render_result?;
 
-        let thumbs: Vec<crate::picker::ThumbnailCellArea> = picker
+        let thumbs: Vec<crate::nav_picker::ThumbnailCellArea> = picker
             .inner()
             .last_artifacts()
             .iter()
             .map(|artifact| match artifact {
                 crate::nav_picker::NavRenderArtifact::Thumbnail { id, area } => {
-                    crate::picker::ThumbnailCellArea {
+                    crate::nav_picker::ThumbnailCellArea {
                         view_id: id.view_id(),
                         area: *area,
                     }
@@ -220,7 +219,10 @@ impl TerminalSession {
         Ok(())
     }
 
-    pub fn draw_connection_picker(&mut self, picker: &mut Cached<ConnectionPicker>) -> Result<()> {
+    pub fn draw_connection_picker(
+        &mut self,
+        picker: &mut Cached<NavPicker<ConnectionNavItem>>,
+    ) -> Result<()> {
         self.inner.images().delete_placement(MAIN_PLACEMENT_ID)?;
         let mut render_result: Result<()> = Ok(());
         self.inner.draw(|frame| {
@@ -362,7 +364,10 @@ impl TerminalBackend for TerminalSession {
         Self::close_picker(self, store)
     }
 
-    fn draw_connection_picker(&mut self, picker: &mut Cached<ConnectionPicker>) -> Result<()> {
+    fn draw_connection_picker(
+        &mut self,
+        picker: &mut Cached<NavPicker<ConnectionNavItem>>,
+    ) -> Result<()> {
         Self::draw_connection_picker(self, picker)
     }
 

@@ -1,13 +1,12 @@
 use crate::backend::TerminalBackend;
 use crate::clipboard::Clipboard;
 use crate::config::AppConfig;
-use crate::connection_picker::{ConnectionPicker, ConnectionPickerOutcome};
 use crate::event::Command;
 use crate::ids::ViewId;
 use crate::keymap::{KeyMap, KeyMapExt};
 use crate::log_view::{LogView, LogViewOutcome};
 use crate::logger::SharedLogBuffer;
-use crate::nav_items::ViewNavItem;
+use crate::nav_items::{ConnectionNavItem, ViewNavItem};
 use crate::nav_picker::{NavOutcome, NavPicker, NavPickerConfig, NavPickerMode};
 use crate::render_pool::{RenderPriority, RenderScheduler};
 use crate::state::{AppState, Effect};
@@ -53,7 +52,7 @@ struct DialogSlot {
 
 #[derive(Debug)]
 struct ConnectionPickerSlot {
-    picker: Cached<ConnectionPicker>,
+    picker: Cached<NavPicker<ConnectionNavItem>>,
 }
 
 #[derive(Debug)]
@@ -341,17 +340,17 @@ impl App {
             };
             match slot.picker.handle_event(&key)? {
                 ComponentOutcome::Message(m) => m,
-                _ => ConnectionPickerOutcome::Continue,
+                _ => NavOutcome::Continue,
             }
         };
         match outcome {
-            ConnectionPickerOutcome::Continue => {
+            NavOutcome::Continue => {
                 if let Some(slot) = self.connection_picker_slot.as_mut() {
                     terminal.draw_connection_picker(&mut slot.picker)?;
                 }
                 Ok(())
             }
-            ConnectionPickerOutcome::Select(candidate) => {
+            NavOutcome::Select(candidate) => {
                 terminal.close_connection_picker()?;
                 self.connection_picker_slot = None;
                 self.focus.pop_scope();
@@ -365,7 +364,7 @@ impl App {
                 terminal.render(&self.frame_with_progress(), &mut self.store)?;
                 Ok(())
             }
-            ConnectionPickerOutcome::Cancel => {
+            NavOutcome::Cancel => {
                 terminal.close_connection_picker()?;
                 self.connection_picker_slot = None;
                 self.focus.pop_scope();
@@ -621,9 +620,31 @@ impl App {
                 let candidates = self
                     .store
                     .connection_candidates_for_element(current, &source_element_id);
+                let source_element_name = self
+                    .store
+                    .model
+                    .elements
+                    .get(&source_element_id)
+                    .map(|e| e.name.clone())
+                    .unwrap_or_else(|| source_element_id.to_string());
                 terminal.teardown_image_viewport(current)?;
-                let picker_inner =
-                    ConnectionPicker::new(&source_element_id, candidates, &self.store);
+                let items = ConnectionNavItem::collect_from_candidates(candidates, &self.store);
+                let picker_inner = NavPicker::new(
+                    NavPickerConfig {
+                        id: ComponentId::new("c4tui-connection-picker"),
+                        title: " Connection Picker ".into(),
+                        footer_hint: " Enter → navigate | Esc → cancel ".into(),
+                        default_header: format!(
+                            "Connections for {}  -  Enter to navigate, Esc to cancel",
+                            source_element_name
+                        ),
+                        min_cell_cols: 34,
+                        cell_rows: 5,
+                        mode: NavPickerMode::Flat,
+                    },
+                    items,
+                    0,
+                );
                 self.focus
                     .push_scope(
                         SCOPE_CONNECTION_PICKER,

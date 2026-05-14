@@ -1,8 +1,7 @@
 use crate::config::KeyBindings;
-use crate::connection_picker::ConnectionPicker;
 use crate::ids::ViewId;
 use crate::log_view::LogView;
-use crate::nav_items::ViewNavItem;
+use crate::nav_items::{ConnectionNavItem, ViewNavItem};
 use crate::nav_picker::NavPicker;
 use crate::state::RenderFrame;
 use crate::view::ViewStore;
@@ -20,7 +19,10 @@ pub trait TerminalBackend {
         store: &ViewStore,
     ) -> Result<()>;
     fn close_picker(&mut self, store: &ViewStore) -> Result<()>;
-    fn draw_connection_picker(&mut self, picker: &mut Cached<ConnectionPicker>) -> Result<()>;
+    fn draw_connection_picker(
+        &mut self,
+        picker: &mut Cached<NavPicker<ConnectionNavItem>>,
+    ) -> Result<()>;
     fn close_connection_picker(&mut self) -> Result<()>;
     fn draw_log_view(&mut self, log_view: &mut LogView) -> Result<()>;
     fn clear_image_cache(&mut self) -> Result<()>;
@@ -115,7 +117,10 @@ pub mod fake {
             Ok(())
         }
 
-        fn draw_connection_picker(&mut self, _picker: &mut Cached<ConnectionPicker>) -> Result<()> {
+        fn draw_connection_picker(
+            &mut self,
+            _picker: &mut Cached<NavPicker<ConnectionNavItem>>,
+        ) -> Result<()> {
             self.calls.push(FakeTerminalCall::DrawConnectionPicker);
             self.connection_picker_draws += 1;
             Ok(())
