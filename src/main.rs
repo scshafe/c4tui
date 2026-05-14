@@ -10,6 +10,7 @@ mod ids;
 mod keymap;
 mod log_view;
 mod logger;
+mod nav_items;
 mod picker;
 mod render;
 mod render_pool;
