@@ -2,10 +2,15 @@
 //! by c4tui produces.
 //!
 //! Step 1.1 introduced the [`NavTarget`] enum and empty struct shells.
-//! Step 1.4 (this commit) lands the concrete fields and the three
-//! `impl NavItem` blocks (`ViewNavItem`, `ChildViewNavItem`,
-//! `ConnectionNavItem`) plus one real-typed test per item that exercises
-//! the trait surface against the production types.
+//! Step 1.4 landed the concrete fields and `impl NavItem` blocks
+//! (`ViewNavItem`, `ConnectionNavItem`) plus one real-typed test per item
+//! that exercises the trait surface against the production types.
+//!
+//! Task 3 (Phase F) collapsed the original `ChildViewNavItem(pub ViewNavItem)`
+//! newtype into `ViewNavItem`: both the top-level and child-view pickers
+//! reuse `Cached<NavPicker<ViewNavItem>>`, and `PickerSlot.action`
+//! (`SelectView` vs `Drill`) carries the variant intent that the newtype
+//! previously encoded.
 
 #![allow(dead_code)]
 
@@ -166,67 +171,6 @@ impl NavItem for ViewNavItem {
 
     fn outcome(&self) -> ViewId {
         self.view_id
-    }
-}
-
-/// Item that yields `NavTarget::ChildView(...)` when selected from the
-/// drill-down picker spawned by `Effect::OpenChildViewPicker`.
-///
-/// Currently structurally identical to `ViewNavItem`. The distinct type
-/// keeps the call site's intent explicit: a `ChildViewNavItem` will be
-/// wrapped in `NavTarget::ChildView` at the spawn point, while a
-/// `ViewNavItem` becomes `NavTarget::View`.
-///
-/// No `collect_all` constructor by design -- child-view pickers are always
-/// scoped to a candidate list (the children of the current drilled
-/// element), not over every view in the workspace.
-#[derive(Debug, Clone)]
-pub struct ChildViewNavItem(pub ViewNavItem);
-
-impl ChildViewNavItem {
-    pub fn collect_for_view_ids(
-        views: &[ViewInfo],
-        model: &WorkspaceModel,
-        view_ids: &[ViewId],
-    ) -> Vec<Self> {
-        ViewNavItem::collect_for_view_ids(views, model, view_ids)
-            .into_iter()
-            .map(Self)
-            .collect()
-    }
-}
-
-impl NavItem for ChildViewNavItem {
-    type Output = ViewId;
-
-    fn filter_text(&self) -> &str {
-        self.0.filter_text()
-    }
-
-    fn group(&self) -> Option<&str> {
-        self.0.group()
-    }
-
-    fn secondary_filter_tokens(&self) -> &[String] {
-        self.0.secondary_filter_tokens()
-    }
-
-    fn is_secondary(&self) -> bool {
-        self.0.is_secondary()
-    }
-
-    fn render_into_canvas(
-        &self,
-        canvas: NavCellCanvas<'_, '_>,
-        selected: bool,
-        filter: &str,
-        sink: &mut dyn FnMut(NavRenderArtifact),
-    ) {
-        self.0.render_into_canvas(canvas, selected, filter, sink)
-    }
-
-    fn outcome(&self) -> ViewId {
-        self.0.outcome()
     }
 }
 
@@ -405,27 +349,6 @@ mod tests {
     }
 
     #[test]
-    fn child_view_nav_item_delegates_through_inner_view_item() {
-        let model = WorkspaceModel::default();
-        let views = vec![
-            view_info("a", "Alpha", ViewKind::Container, &[]),
-            view_info("b-key", "Beta (key)", ViewKind::Key, &[]),
-        ];
-
-        let items = ChildViewNavItem::collect_for_view_ids(
-            &views,
-            &model,
-            &[ViewId::new(1), ViewId::new(0)],
-        );
-
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0].filter_text(), "Beta (key)");
-        assert!(items[0].is_secondary(), "key views are secondary");
-        assert_eq!(items[0].outcome(), ViewId::new(1));
-        assert_eq!(items[1].outcome(), ViewId::new(0));
-    }
-
-    #[test]
     fn connection_nav_item_resolves_names_and_relationship_detail() {
         // Build a minimal ViewStore so collect_from_candidates can look up
         // element/relationship metadata and view names.
@@ -511,25 +434,6 @@ mod tests {
             !secondary_tokens.iter().any(|t| t.contains("description")),
             "description is not part of the filter surface"
         );
-    }
-
-    /// `ChildViewNavItem` delegates to its inner `ViewNavItem`, so it
-    /// inherits the same name-only filter surface. Lock that in.
-    #[test]
-    fn child_view_nav_item_filter_text_surface_is_name_only() {
-        let model = WorkspaceModel::default();
-        let mut info = view_info("zzz-key", "Beta", ViewKind::Container, &[]);
-        info.description = Some("Some description text".to_owned());
-        let views = vec![info];
-
-        let items = ChildViewNavItem::collect_for_view_ids(&views, &model, &[ViewId::new(0)]);
-        let item = &items[0];
-
-        assert_eq!(item.filter_text(), "Beta");
-        let secondary_tokens: Vec<&String> = item.secondary_filter_tokens().iter().collect();
-        assert!(!secondary_tokens.iter().any(|t| t.contains("zzz")));
-        assert!(!secondary_tokens.iter().any(|t| t.contains("Container")));
-        assert!(!secondary_tokens.iter().any(|t| t.contains("description")));
     }
 
     /// `ConnectionNavItem` filters on the connected element name only.

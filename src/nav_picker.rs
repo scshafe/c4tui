@@ -40,8 +40,8 @@ pub enum NavOutcome<T> {
 /// (`Output` + `outcome`).
 ///
 /// Item types are deliberately concrete c4tui structs (`ViewNavItem`,
-/// `ConnectionNavItem`, `ChildViewNavItem`). Future Phase 5 work may add a
-/// fourth (`LinkCandidate`). Adding more is one `impl NavItem` block -- no
+/// `ConnectionNavItem`). Future Phase 5 work may add a third
+/// (`LinkCandidate`). Adding more is one `impl NavItem` block -- no
 /// changes to NavPicker itself.
 pub trait NavItem: Clone {
     /// What `Enter` produces when this item is selected.

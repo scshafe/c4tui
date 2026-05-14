@@ -17,7 +17,7 @@ use anyhow::Result;
 use log::{error, info};
 use std::collections::VecDeque;
 use std::sync::mpsc::TryRecvError;
-use tui_kit::component::{Cached, ComponentOutcome};
+use tui_kit::component::{Cached, ComponentId, ComponentOutcome};
 use tui_kit::events::{
     AppEvent, AppEventReceiver, AppEventSender, SchedulerEvent, TerminalEvent, WatcherEvent,
 };
@@ -504,8 +504,6 @@ impl App {
                 self.quit = true;
             }
             Some(Effect::OpenPicker) => {
-                use tui_kit::component::ComponentId;
-
                 let current = self.state.current();
                 terminal.teardown_image_viewport(current)?;
                 let items = ViewNavItem::collect_all(&self.store.views, &self.store.model);
@@ -561,8 +559,6 @@ impl App {
                 }
             }
             Some(Effect::OpenChildViewPicker { target_view_ids }) => {
-                use tui_kit::component::ComponentId;
-
                 let current = self.state.current();
                 terminal.teardown_image_viewport(current)?;
                 let items = ViewNavItem::collect_for_view_ids(
@@ -578,16 +574,14 @@ impl App {
                 let picker_inner = NavPicker::new(
                     NavPickerConfig {
                         id: ComponentId::new("c4tui-child-view-picker"),
-                        title: " View Picker ".into(),
-                        footer_hint:
-                            " type → filter | Tab → legends | Enter → select | Esc → cancel "
-                                .into(),
-                        default_header: "Pick a view  —  type to filter, Enter to select, Esc to cancel, Tab to toggle key views".into(),
+                        title: " Related Views ".into(),
+                        footer_hint: " type → filter | Enter → drill | Esc → cancel ".into(),
+                        default_header: "Pick a child view to drill into".into(),
                         min_cell_cols: 22,
                         cell_rows: 8,
                         mode: NavPickerMode::Filterable {
-                            allows_secondary_toggle: true,
-                            secondary_label: "legends",
+                            allows_secondary_toggle: false,
+                            secondary_label: "",
                         },
                     },
                     items,
