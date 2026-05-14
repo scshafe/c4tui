@@ -12,9 +12,7 @@
 use ratatui::style::{Modifier, Style};
 
 use crate::ids::ViewId;
-use crate::nav_picker::{
-    NavCellCanvas, NavItem, NavRenderArtifact, SecondaryClassified, ThumbnailId,
-};
+use crate::nav_picker::{truncate, NavCellCanvas, NavItem, NavRenderArtifact, ThumbnailId};
 use crate::view::ConnectionNavigationCandidate;
 use crate::workspace::{ViewInfo, ViewKind, WorkspaceModel};
 
@@ -103,7 +101,10 @@ impl NavItem for ViewNavItem {
 
     fn filter_text(&self) -> &str {
         // `filter_text` is just `name`; secondary tokens carry the element
-        // names that should also match this view in the filter.
+        // names that should also match this view in the filter. The other
+        // text fields (`key`, `kind.label()`, `description`) are NOT
+        // searchable -- this is a deliberate narrowing of the legacy
+        // picker's filter surface, locked in by `nav_picker.rs` tests.
         &self.name
     }
 
@@ -113,6 +114,10 @@ impl NavItem for ViewNavItem {
 
     fn secondary_filter_tokens(&self) -> &[String] {
         &self.element_names
+    }
+
+    fn is_secondary(&self) -> bool {
+        self.kind.is_legend()
     }
 
     fn render_into_canvas(
@@ -137,7 +142,7 @@ impl NavItem for ViewNavItem {
             if image_rows > 0 && image_cols > 0 {
                 let area = canvas.local_cell_area(1, 1, image_cols, image_rows);
                 sink(NavRenderArtifact::Thumbnail {
-                    id: ThumbnailId(self.view_id),
+                    id: ThumbnailId::view(self.view_id),
                     area,
                 });
             }
@@ -164,12 +169,6 @@ impl NavItem for ViewNavItem {
     }
 }
 
-impl SecondaryClassified for ViewNavItem {
-    fn is_secondary(&self) -> bool {
-        self.kind.is_legend()
-    }
-}
-
 /// Item that yields `NavTarget::ChildView(...)` when selected from the
 /// drill-down picker spawned by `Effect::OpenChildViewPicker`.
 ///
@@ -177,6 +176,10 @@ impl SecondaryClassified for ViewNavItem {
 /// keeps the call site's intent explicit: a `ChildViewNavItem` will be
 /// wrapped in `NavTarget::ChildView` at the spawn point, while a
 /// `ViewNavItem` becomes `NavTarget::View`.
+///
+/// No `collect_all` constructor by design -- child-view pickers are always
+/// scoped to a candidate list (the children of the current drilled
+/// element), not over every view in the workspace.
 #[derive(Debug, Clone)]
 pub struct ChildViewNavItem(pub ViewNavItem);
 
@@ -208,6 +211,10 @@ impl NavItem for ChildViewNavItem {
         self.0.secondary_filter_tokens()
     }
 
+    fn is_secondary(&self) -> bool {
+        self.0.is_secondary()
+    }
+
     fn render_into_canvas(
         &self,
         canvas: NavCellCanvas<'_, '_>,
@@ -220,12 +227,6 @@ impl NavItem for ChildViewNavItem {
 
     fn outcome(&self) -> ViewId {
         self.0.outcome()
-    }
-}
-
-impl SecondaryClassified for ChildViewNavItem {
-    fn is_secondary(&self) -> bool {
-        self.0.is_secondary()
     }
 }
 
@@ -333,16 +334,6 @@ impl NavItem for ConnectionNavItem {
 
     fn outcome(&self) -> ConnectionNavigationCandidate {
         self.candidate.clone()
-    }
-}
-
-impl SecondaryClassified for ConnectionNavItem {}
-
-fn truncate(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        text.to_owned()
-    } else {
-        text.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
     }
 }
 
