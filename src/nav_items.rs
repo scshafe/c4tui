@@ -477,4 +477,113 @@ mod tests {
         assert_eq!(item.outcome(), candidate);
         assert!(!item.is_secondary());
     }
+
+    /// Locks in the name-only filter surface of `ViewNavItem`. The legacy
+    /// `picker.rs` also matched against the view key, kind label, and
+    /// description; that wider surface is intentionally NOT inherited. If
+    /// we ever want to widen it again the right move is to extend
+    /// `secondary_filter_tokens`, not `filter_text`.
+    #[test]
+    fn view_nav_item_filter_text_surface_is_name_only() {
+        let model = WorkspaceModel::default();
+        let mut info = view_info("zzz-key", "Alpha", ViewKind::Container, &[]);
+        info.description = Some("Some description text".to_owned());
+        let views = vec![info];
+
+        let items = ViewNavItem::collect_all(&views, &model);
+        let item = &items[0];
+
+        // The name is in `filter_text()`.
+        assert_eq!(item.filter_text(), "Alpha");
+        // The key, kind label, and description are NOT in either filter
+        // surface (`filter_text` is name only; `secondary_filter_tokens`
+        // is element names only).
+        let secondary_tokens: Vec<&String> = item.secondary_filter_tokens().iter().collect();
+        assert!(
+            !secondary_tokens.iter().any(|t| t.contains("zzz")),
+            "view key is not part of the filter surface"
+        );
+        assert!(
+            !secondary_tokens.iter().any(|t| t.contains("Container")),
+            "kind label is not part of the filter surface"
+        );
+        assert!(
+            !secondary_tokens.iter().any(|t| t.contains("description")),
+            "description is not part of the filter surface"
+        );
+    }
+
+    /// `ChildViewNavItem` delegates to its inner `ViewNavItem`, so it
+    /// inherits the same name-only filter surface. Lock that in.
+    #[test]
+    fn child_view_nav_item_filter_text_surface_is_name_only() {
+        let model = WorkspaceModel::default();
+        let mut info = view_info("zzz-key", "Beta", ViewKind::Container, &[]);
+        info.description = Some("Some description text".to_owned());
+        let views = vec![info];
+
+        let items = ChildViewNavItem::collect_for_view_ids(&views, &model, &[ViewId::new(0)]);
+        let item = &items[0];
+
+        assert_eq!(item.filter_text(), "Beta");
+        let secondary_tokens: Vec<&String> = item.secondary_filter_tokens().iter().collect();
+        assert!(!secondary_tokens.iter().any(|t| t.contains("zzz")));
+        assert!(!secondary_tokens.iter().any(|t| t.contains("Container")));
+        assert!(!secondary_tokens.iter().any(|t| t.contains("description")));
+    }
+
+    /// `ConnectionNavItem` filters on the connected element name only.
+    /// The relationship detail, technology, direction label, and target
+    /// view name are NOT in the filter surface.
+    #[test]
+    fn connection_nav_item_filter_text_surface_is_connected_name_only() {
+        let mut model = WorkspaceModel::default();
+        let (user_id, user_meta) = element("1", "User", ElementKind::Person);
+        let (system_id, system_meta) = element("2", "Billing", ElementKind::SoftwareSystem);
+        model.elements.insert(user_id.clone(), user_meta);
+        model.elements.insert(system_id.clone(), system_meta);
+
+        let rel_id = RelationshipId::new("10");
+        model.relationships.insert(
+            rel_id.clone(),
+            RelationshipMetadata {
+                id: rel_id.clone(),
+                source_id: user_id.clone(),
+                destination_id: system_id.clone(),
+                description: Some("ZetaDescription".to_owned()),
+                technology: Some("ZetaTech".to_owned()),
+                tags: Vec::new(),
+            },
+        );
+
+        let views = vec![view_info(
+            "zzz-key",
+            "ZetaView",
+            ViewKind::SystemContext,
+            &["1", "2"],
+        )];
+
+        let store = crate::view::ViewStore::new(views, crate::render::RasterBudget::default())
+            .unwrap()
+            .with_model(model);
+
+        let candidate = ConnectionNavigationCandidate {
+            relationship_id: rel_id.clone(),
+            direction: ConnectionDirection::Outgoing,
+            connected_element_id: system_id.clone(),
+            view_id: ViewId::new(0),
+        };
+
+        let items = ConnectionNavItem::collect_from_candidates(vec![candidate], &store);
+        let item = &items[0];
+
+        assert_eq!(item.filter_text(), "Billing");
+        // Nothing else feeds into the filter surface.
+        assert!(item.secondary_filter_tokens().is_empty());
+        // Sanity-check that relationship/technology/view text exist on the
+        // item but are not in either filter surface.
+        assert!(item.relationship_detail.contains("ZetaDescription"));
+        assert!(item.relationship_detail.contains("ZetaTech"));
+        assert_eq!(item.target_view, "ZetaView");
+    }
 }
