@@ -439,7 +439,7 @@ impl App {
                     .picker_slot
                     .as_ref()
                     .map(|slot| slot.action)
-                    .unwrap_or(PickerAction::SelectView);
+                    .expect("picker_slot present when handling Select outcome");
                 self.picker_slot = None;
                 self.focus.pop_scope();
                 let canvas = terminal.canvas_metrics();

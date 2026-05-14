@@ -664,6 +664,22 @@ mod tests {
     }
 
     #[test]
+    fn tab_in_filterable_without_toggle_is_noop() {
+        // Filterable pickers configured with allows_secondary_toggle: false
+        // (the mode used by the child-view picker) must treat Tab as a no-op:
+        // outcome is Continue and show_secondary stays unchanged.
+        let mut p = NavPicker::new(
+            filterable_config(false),
+            items(&[("primary", 1, false), ("legend", 2, true)]),
+            0,
+        );
+        let before = p.show_secondary();
+        let outcome = p.handle_key(KeyEvent::Tab);
+        assert_eq!(outcome, NavOutcome::Continue);
+        assert_eq!(p.show_secondary(), before);
+    }
+
+    #[test]
     fn tab_in_secondary_toggle_picker_toggles_visibility() {
         let mut p = NavPicker::new(
             filterable_config(true),
