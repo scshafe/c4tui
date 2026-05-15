@@ -2,8 +2,7 @@ use crate::backend::TerminalBackend;
 use crate::config::{AppConfig, KeyBindings};
 use crate::ids::{ElementId, ViewId};
 use crate::log_view::LogView;
-use crate::nav_items::{ConnectionNavItem, ViewNavItem};
-use crate::nav_picker::NavPicker;
+use crate::modal::Modal;
 use crate::state::RenderFrame;
 use crate::statusbar::{default_footer_bar, default_status_bar, StatusBar, StatusContext};
 use crate::view::{image_id_for_view, ViewStore};
@@ -12,7 +11,6 @@ use anyhow::Result;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
-use tui_kit::component::Cached;
 use tui_kit::image::{picker_placement_id, ImageSurface, MAIN_PLACEMENT_ID};
 use tui_kit::layout::{CanvasMetrics, CellArea, CellSize};
 use tui_kit::terminal::TerminalConfig;
@@ -148,7 +146,10 @@ impl TerminalSession {
         Ok(())
     }
 
-    pub fn close_picker(&mut self, store: &ViewStore) -> Result<()> {
+    pub fn close_modal_inner(&mut self, store: &ViewStore) -> Result<()> {
+        // Tear down every per-view picker placement. Connection-picker /
+        // log variants never registered placements, so this is a no-op for
+        // them — keeping one path is honest.
         self.inner
             .teardown_image_viewports((0..store.views.len()).map(|index| {
                 (
@@ -160,11 +161,6 @@ impl TerminalSession {
         Ok(())
     }
 
-    pub fn close_connection_picker(&mut self) -> Result<()> {
-        self.inner.images().flush()?;
-        Ok(())
-    }
-
     pub fn teardown_image_viewport(&mut self, view_id: ViewId) -> Result<()> {
         self.inner
             .teardown_image_viewport(image_id_for_view(view_id), MAIN_PLACEMENT_ID)?;
@@ -172,64 +168,51 @@ impl TerminalSession {
         Ok(())
     }
 
-    pub fn draw_picker(
-        &mut self,
-        picker: &mut Cached<NavPicker<ViewNavItem>>,
-        store: &ViewStore,
-    ) -> Result<()> {
-        let mut render_result: Result<()> = Ok(());
-        self.inner.draw(|frame| {
-            let area = frame.area();
-            render_result = picker.render_to_buffer(area, frame.buffer_mut());
-        })?;
-        render_result?;
-
-        let thumbs: Vec<crate::nav_picker::ThumbnailCellArea> = picker
-            .inner()
-            .last_artifacts()
-            .iter()
-            .map(|artifact| match artifact {
-                crate::nav_picker::NavRenderArtifact::Thumbnail { id, area } => {
-                    crate::nav_picker::ThumbnailCellArea {
-                        view_id: id.view_id(),
-                        area: *area,
-                    }
-                }
-            })
-            .collect();
-        let placements_to_clear: Vec<(u32, u32)> = (0..store.views.len())
-            .map(|index| {
-                (
-                    image_id_for_view(ViewId::new(index)),
-                    picker_placement_id(index),
-                )
-            })
-            .filter(|(_, placement_id)| {
-                !thumbs
-                    .iter()
-                    .any(|thumb| picker_placement_id(thumb.view_id.index()) == *placement_id)
-            })
-            .collect();
-        self.inner.teardown_image_viewports(placements_to_clear)?;
-
-        for thumb in &thumbs {
-            self.draw_thumbnail(thumb.view_id, thumb.area, store)?;
+    pub fn render_modal_inner(&mut self, modal: &mut dyn Modal, store: &ViewStore) -> Result<()> {
+        for placement_id in modal.pre_render_placements_to_clear() {
+            self.inner.images().delete_placement(placement_id)?;
         }
-        self.inner.images().flush()?;
-        Ok(())
-    }
-
-    pub fn draw_connection_picker(
-        &mut self,
-        picker: &mut Cached<NavPicker<ConnectionNavItem>>,
-    ) -> Result<()> {
-        self.inner.images().delete_placement(MAIN_PLACEMENT_ID)?;
+        if modal.clear_all_placements_pre_render() {
+            // LogView wants every placement gone so clipboard yank operates
+            // on a clean text surface. Tolerate environments that don't
+            // support it (mirrors the legacy draw_log_view behavior).
+            self.inner
+                .images()
+                .delete_all_placements()
+                .or_else(|_| Ok::<_, anyhow::Error>(()))
+                .ok();
+        }
         let mut render_result: Result<()> = Ok(());
         self.inner.draw(|frame| {
             let area = frame.area();
-            render_result = picker.render_to_buffer(area, frame.buffer_mut());
+            render_result = modal.render(area, frame.buffer_mut());
         })?;
         render_result?;
+
+        let thumbs = modal.post_render_thumbnails();
+        if !thumbs.is_empty() {
+            // For pickers with thumbnails, tear down placement slots not in
+            // the current set (so removed thumbnails don't ghost), then
+            // paint the active ones.
+            let active_placements: std::collections::HashSet<u32> = thumbs
+                .iter()
+                .map(|t| picker_placement_id(t.view_id.index()))
+                .collect();
+            let placements_to_clear: Vec<(u32, u32)> = (0..store.views.len())
+                .map(|index| {
+                    (
+                        image_id_for_view(ViewId::new(index)),
+                        picker_placement_id(index),
+                    )
+                })
+                .filter(|(_, placement_id)| !active_placements.contains(placement_id))
+                .collect();
+            self.inner.teardown_image_viewports(placements_to_clear)?;
+
+            for thumb in &thumbs {
+                self.draw_thumbnail(thumb.view_id, thumb.area, store)?;
+            }
+        }
         self.inner.images().flush()?;
         Ok(())
     }
@@ -301,25 +284,6 @@ impl TerminalSession {
         self.inner.images().flush()?;
         Ok(())
     }
-
-    pub fn draw_log_view(&mut self, log_view: &mut LogView) -> Result<()> {
-        // Clear any diagram image so the log pane gets a clean text surface
-        // and clipboard selection is unobstructed by graphic cells.
-        self.inner.images().delete_placement(MAIN_PLACEMENT_ID)?;
-        self.inner
-            .images()
-            .delete_all_placements()
-            .or_else(|_| Ok::<_, anyhow::Error>(()))
-            .ok();
-        let mut render_result: Result<()> = Ok(());
-        self.inner.draw(|frame| {
-            let area = frame.area();
-            render_result = render_log_view(area, frame.buffer_mut(), log_view);
-        })?;
-        render_result?;
-        self.inner.images().flush()?;
-        Ok(())
-    }
 }
 
 fn pinned_connection_counts(
@@ -352,31 +316,12 @@ impl TerminalBackend for TerminalSession {
         Self::teardown_image_viewport(self, view_id)
     }
 
-    fn draw_picker(
-        &mut self,
-        picker: &mut Cached<NavPicker<ViewNavItem>>,
-        store: &ViewStore,
-    ) -> Result<()> {
-        Self::draw_picker(self, picker, store)
+    fn render_modal(&mut self, modal: &mut dyn Modal, store: &ViewStore) -> Result<()> {
+        Self::render_modal_inner(self, modal, store)
     }
 
-    fn close_picker(&mut self, store: &ViewStore) -> Result<()> {
-        Self::close_picker(self, store)
-    }
-
-    fn draw_connection_picker(
-        &mut self,
-        picker: &mut Cached<NavPicker<ConnectionNavItem>>,
-    ) -> Result<()> {
-        Self::draw_connection_picker(self, picker)
-    }
-
-    fn close_connection_picker(&mut self) -> Result<()> {
-        Self::close_connection_picker(self)
-    }
-
-    fn draw_log_view(&mut self, log_view: &mut LogView) -> Result<()> {
-        Self::draw_log_view(self, log_view)
+    fn close_modal(&mut self, store: &ViewStore) -> Result<()> {
+        Self::close_modal_inner(self, store)
     }
 
     fn clear_image_cache(&mut self) -> Result<()> {

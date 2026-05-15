@@ -1,30 +1,24 @@
 use crate::config::KeyBindings;
 use crate::ids::ViewId;
-use crate::log_view::LogView;
-use crate::nav_items::{ConnectionNavItem, ViewNavItem};
-use crate::nav_picker::NavPicker;
+use crate::modal::Modal;
 use crate::state::RenderFrame;
 use crate::view::ViewStore;
 use anyhow::Result;
-use tui_kit::component::Cached;
 use tui_kit::layout::CanvasMetrics;
 
 pub trait TerminalBackend {
     fn canvas_metrics(&self) -> CanvasMetrics;
     fn render(&mut self, frame: &RenderFrame, store: &mut ViewStore) -> Result<()>;
     fn teardown_image_viewport(&mut self, view_id: ViewId) -> Result<()>;
-    fn draw_picker(
-        &mut self,
-        picker: &mut Cached<NavPicker<ViewNavItem>>,
-        store: &ViewStore,
-    ) -> Result<()>;
-    fn close_picker(&mut self, store: &ViewStore) -> Result<()>;
-    fn draw_connection_picker(
-        &mut self,
-        picker: &mut Cached<NavPicker<ConnectionNavItem>>,
-    ) -> Result<()>;
-    fn close_connection_picker(&mut self) -> Result<()>;
-    fn draw_log_view(&mut self, log_view: &mut LogView) -> Result<()>;
+    /// Render a modal onto the screen. The modal's
+    /// `pre_render_placements_to_clear`, `clear_all_placements_pre_render`,
+    /// and `post_render_thumbnails` hooks drive image-pipeline side effects;
+    /// the `store` argument supplies the cached rasters needed to paint
+    /// thumbnail placements.
+    fn render_modal(&mut self, modal: &mut dyn Modal, store: &ViewStore) -> Result<()>;
+    /// Tear down any picker-placement slots the modal owned. `store` is
+    /// used to enumerate per-view placement ids.
+    fn close_modal(&mut self, store: &ViewStore) -> Result<()>;
     fn clear_image_cache(&mut self) -> Result<()>;
     fn show_message(&mut self, title: &str, message: &str) -> Result<()>;
     fn show_error(&mut self, title: &str, message: &str) -> Result<()>;
@@ -40,11 +34,8 @@ pub mod fake {
     pub enum FakeTerminalCall {
         Render(ViewId),
         TeardownImageViewport(ViewId),
-        DrawPicker,
-        ClosePicker,
-        DrawConnectionPicker,
-        CloseConnectionPicker,
-        DrawLogView,
+        RenderModal,
+        CloseModal,
         ClearImageCache,
         ShowMessage,
         ShowError,
@@ -61,9 +52,7 @@ pub mod fake {
         pub errors: Vec<(String, String)>,
         pub help_count: usize,
         pub viewport_teardowns: Vec<ViewId>,
-        pub picker_draws: usize,
-        pub connection_picker_draws: usize,
-        pub log_view_draws: usize,
+        pub modal_renders: usize,
     }
 
     impl FakeTerminalBackend {
@@ -77,9 +66,7 @@ pub mod fake {
                 errors: Vec::new(),
                 help_count: 0,
                 viewport_teardowns: Vec::new(),
-                picker_draws: 0,
-                connection_picker_draws: 0,
-                log_view_draws: 0,
+                modal_renders: 0,
             }
         }
     }
@@ -102,38 +89,14 @@ pub mod fake {
             Ok(())
         }
 
-        fn draw_picker(
-            &mut self,
-            _picker: &mut Cached<NavPicker<ViewNavItem>>,
-            _store: &ViewStore,
-        ) -> Result<()> {
-            self.calls.push(FakeTerminalCall::DrawPicker);
-            self.picker_draws += 1;
+        fn render_modal(&mut self, _modal: &mut dyn Modal, _store: &ViewStore) -> Result<()> {
+            self.calls.push(FakeTerminalCall::RenderModal);
+            self.modal_renders += 1;
             Ok(())
         }
 
-        fn close_picker(&mut self, _store: &ViewStore) -> Result<()> {
-            self.calls.push(FakeTerminalCall::ClosePicker);
-            Ok(())
-        }
-
-        fn draw_connection_picker(
-            &mut self,
-            _picker: &mut Cached<NavPicker<ConnectionNavItem>>,
-        ) -> Result<()> {
-            self.calls.push(FakeTerminalCall::DrawConnectionPicker);
-            self.connection_picker_draws += 1;
-            Ok(())
-        }
-
-        fn close_connection_picker(&mut self) -> Result<()> {
-            self.calls.push(FakeTerminalCall::CloseConnectionPicker);
-            Ok(())
-        }
-
-        fn draw_log_view(&mut self, _log_view: &mut LogView) -> Result<()> {
-            self.calls.push(FakeTerminalCall::DrawLogView);
-            self.log_view_draws += 1;
+        fn close_modal(&mut self, _store: &ViewStore) -> Result<()> {
+            self.calls.push(FakeTerminalCall::CloseModal);
             Ok(())
         }
 

@@ -4,11 +4,13 @@ use crate::config::AppConfig;
 use crate::event::Command;
 use crate::ids::ViewId;
 use crate::keymap::{KeyMap, KeyMapExt};
-use crate::log_view::{LogView, LogViewOutcome};
+use crate::log_view::LogView;
 use crate::logger::SharedLogBuffer;
-use crate::modal::ActiveModal;
-use crate::nav_items::{ConnectionNavItem, ViewNavItem};
-use crate::nav_picker::{NavOutcome, NavPicker, NavPickerConfig, NavPickerMode};
+use crate::modal::{ActiveModal, LogModalOutcome, NavModalOutcome, NavPickerModal};
+use crate::nav_items::{ConnectionNavItem, NavTarget, ViewNavItem};
+use crate::nav_picker::{
+    NavPicker, NavPickerConfig, NavPickerMode, NavRenderArtifact, ThumbnailCellArea,
+};
 use crate::render_pool::{RenderPriority, RenderScheduler};
 use crate::state::{AppState, Effect};
 use crate::view::{diagram_placement_policy, ViewStore};
@@ -17,7 +19,7 @@ use anyhow::Result;
 use log::{error, info};
 use std::collections::VecDeque;
 use std::sync::mpsc::TryRecvError;
-use tui_kit::component::{Cached, ComponentId, ComponentOutcome};
+use tui_kit::component::{Cached, ComponentId};
 use tui_kit::events::{
     AppEvent, AppEventReceiver, AppEventSender, SchedulerEvent, TerminalEvent, WatcherEvent,
 };
@@ -34,31 +36,8 @@ const SCOPE_DIALOG: &str = "dialog";
 const SCOPE_LOG: &str = "log";
 
 #[derive(Debug)]
-struct PickerSlot {
-    picker: Cached<NavPicker<ViewNavItem>>,
-    last_hover: ViewId,
-    action: PickerAction,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PickerAction {
-    SelectView,
-    Drill,
-}
-
-#[derive(Debug)]
 struct DialogSlot {
     dismissable: bool,
-}
-
-#[derive(Debug)]
-struct ConnectionPickerSlot {
-    picker: Cached<NavPicker<ConnectionNavItem>>,
-}
-
-#[derive(Debug)]
-struct LogSlot {
-    view: LogView,
 }
 
 pub struct App {
@@ -71,12 +50,7 @@ pub struct App {
     scheduler: RenderScheduler,
     quit: bool,
     focus: FocusManager,
-    picker_slot: Option<PickerSlot>,
-    connection_picker_slot: Option<ConnectionPickerSlot>,
     dialog_slot: Option<DialogSlot>,
-    log_slot: Option<LogSlot>,
-    // Parallel to the four slots above; wired in Task 6.
-    #[allow(dead_code)]
     active_modal: Option<ActiveModal>,
     log_buffer: SharedLogBuffer,
     clipboard: Box<dyn Clipboard>,
@@ -126,10 +100,7 @@ impl App {
             scheduler,
             quit: false,
             focus,
-            picker_slot: None,
-            connection_picker_slot: None,
             dialog_slot: None,
-            log_slot: None,
             active_modal: None,
             log_buffer,
             clipboard,
@@ -148,10 +119,8 @@ impl App {
         while self.focus.active_scope_id().map(FocusId::as_str) != Some(SCOPE_ROOT) {
             self.focus.pop_scope();
         }
-        self.picker_slot = None;
-        self.connection_picker_slot = None;
+        self.active_modal = None;
         self.dialog_slot = None;
-        self.log_slot = None;
     }
 
     /// Recompute the placement policy from the current config and store it on
@@ -165,7 +134,7 @@ impl App {
 
     /// Toggle the log viewer scope. Closes if already open; opens otherwise.
     fn toggle_log_view(&mut self) {
-        if self.log_slot.is_some() {
+        if matches!(self.active_modal, Some(ActiveModal::Log { .. })) {
             self.return_to_root();
             return;
         }
@@ -177,8 +146,8 @@ impl App {
                 vec![FocusNode::new("log-pane")],
             )
             .expect("log scope is well-formed");
-        self.log_slot = Some(LogSlot {
-            view: LogView::new(self.log_buffer.clone()),
+        self.active_modal = Some(ActiveModal::Log {
+            modal: Box::new(LogView::new(self.log_buffer.clone())),
         });
     }
 
@@ -314,9 +283,9 @@ impl App {
         terminal: &mut impl TerminalBackend,
     ) -> Result<()> {
         match self.active_scope() {
-            SCOPE_PICKER => self.handle_key_picker(key, terminal),
-            SCOPE_CONNECTION_PICKER => self.handle_key_connection_picker(key, terminal),
-            SCOPE_LOG => self.handle_key_log(key, terminal),
+            SCOPE_PICKER | SCOPE_CONNECTION_PICKER | SCOPE_LOG => {
+                self.handle_modal_key(key, terminal)
+            }
             SCOPE_DIALOG => {
                 if self
                     .dialog_slot
@@ -334,132 +303,95 @@ impl App {
         }
     }
 
-    fn handle_key_connection_picker(
+    /// Drive the currently-active modal through one key event. Replaces the
+    /// pre-Task-6 trio (`handle_key_picker`, `handle_key_connection_picker`,
+    /// `handle_key_log`); the variant inside `ActiveModal` is what
+    /// discriminates instead of the focus scope.
+    fn handle_modal_key(
         &mut self,
         key: KeyEvent,
         terminal: &mut impl TerminalBackend,
     ) -> Result<()> {
-        let outcome = {
-            let Some(slot) = self.connection_picker_slot.as_mut() else {
-                return Ok(());
-            };
-            match slot.picker.handle_event(&key)? {
-                ComponentOutcome::Message(m) => m,
-                _ => NavOutcome::Continue,
-            }
-        };
-        match outcome {
-            NavOutcome::Continue => {
-                if let Some(slot) = self.connection_picker_slot.as_mut() {
-                    terminal.draw_connection_picker(&mut slot.picker)?;
-                }
-                Ok(())
-            }
-            NavOutcome::Select(candidate) => {
-                terminal.close_connection_picker()?;
-                self.connection_picker_slot = None;
-                self.focus.pop_scope();
-                let canvas = terminal.canvas_metrics();
-                self.state.apply(
-                    Command::SelectConnection(candidate),
-                    &mut self.store,
-                    canvas,
-                )?;
-                self.request_active_render();
-                terminal.render(&self.frame_with_progress(), &mut self.store)?;
-                Ok(())
-            }
-            NavOutcome::Cancel => {
-                terminal.close_connection_picker()?;
-                self.connection_picker_slot = None;
-                self.focus.pop_scope();
-                terminal.render(&self.frame_with_progress(), &mut self.store)?;
-                Ok(())
-            }
+        // Capture the modal's response while the borrow on `active_modal`
+        // is still alive, then drop it before touching other `self` fields.
+        // `Step` records what the outer transition needs to do.
+        enum Step {
+            Idle,
+            NavContinue { hover: Option<ViewId> },
+            NavSelect(NavTarget),
+            NavCancel,
+            LogContinue,
+            LogClose,
         }
-    }
-
-    fn handle_key_log(&mut self, key: KeyEvent, terminal: &mut impl TerminalBackend) -> Result<()> {
-        let outcome = {
-            let Some(slot) = self.log_slot.as_mut() else {
-                return Ok(());
-            };
-            slot.view.handle_key(key, self.clipboard.as_ref())?
+        let step = match self.active_modal.as_mut() {
+            None => Step::Idle,
+            Some(ActiveModal::Nav { modal, .. }) => match modal.handle_key(key) {
+                NavModalOutcome::Continue => Step::NavContinue {
+                    hover: modal.currently_hovered_view(),
+                },
+                NavModalOutcome::Select(target) => Step::NavSelect(target),
+                NavModalOutcome::Cancel => Step::NavCancel,
+            },
+            Some(ActiveModal::Log { modal }) => {
+                match modal.handle_key(key, self.clipboard.as_ref())? {
+                    LogModalOutcome::Continue => Step::LogContinue,
+                    LogModalOutcome::Close => Step::LogClose,
+                }
+            }
         };
-        match outcome {
-            LogViewOutcome::Continue => {
-                if let Some(slot) = self.log_slot.as_mut() {
-                    terminal.draw_log_view(&mut slot.view)?;
-                }
-                Ok(())
-            }
-            LogViewOutcome::Close => {
-                self.return_to_root();
-                terminal.render(&self.frame_with_progress(), &mut self.store)?;
-                Ok(())
-            }
-        }
-    }
 
-    fn handle_key_picker(
-        &mut self,
-        key: KeyEvent,
-        terminal: &mut impl TerminalBackend,
-    ) -> Result<()> {
-        let outcome = {
-            let Some(slot) = self.picker_slot.as_mut() else {
-                return Ok(());
-            };
-            let outcome = match slot.picker.handle_event(&key)? {
-                ComponentOutcome::Message(m) => m,
-                _ => NavOutcome::Continue,
-            };
-            let now = slot
-                .picker
-                .inner()
-                .selected()
-                .map(|item| item.view_id)
-                .unwrap_or(slot.last_hover);
-            if now != slot.last_hover {
-                if !self.store.has_rendered(now) {
-                    let path = self.store.view(now).svg_path.clone();
-                    self.scheduler
-                        .request(now, RenderPriority::Hover, path, self.store.budget());
+        match step {
+            Step::Idle => Ok(()),
+            Step::NavContinue { hover } => {
+                if let Some(hover) = hover {
+                    if !self.store.has_rendered(hover) {
+                        let path = self.store.view(hover).svg_path.clone();
+                        self.scheduler.request(
+                            hover,
+                            RenderPriority::Hover,
+                            path,
+                            self.store.budget(),
+                        );
+                    }
                 }
-                slot.last_hover = now;
-            }
-            outcome
-        };
-        match outcome {
-            NavOutcome::Continue => {
-                if let Some(slot) = self.picker_slot.as_mut() {
-                    terminal.draw_picker(&mut slot.picker, &self.store)?;
+                if let Some(active) = self.active_modal.as_mut() {
+                    terminal.render_modal(active.as_modal_mut(), &self.store)?;
                 }
                 Ok(())
             }
-            NavOutcome::Select(view_id) => {
-                terminal.close_picker(&self.store)?;
-                let action = self
-                    .picker_slot
-                    .as_ref()
-                    .map(|slot| slot.action)
-                    .expect("picker_slot present when handling Select outcome");
-                self.picker_slot = None;
-                self.focus.pop_scope();
-                let canvas = terminal.canvas_metrics();
-                let command = match action {
-                    PickerAction::SelectView => Command::SelectView(view_id),
-                    PickerAction::Drill => Command::SelectChildView(view_id),
+            Step::NavSelect(target) => {
+                let modal = self
+                    .active_modal
+                    .take()
+                    .expect("active modal present when handling Select");
+                let ActiveModal::Nav { on_select, .. } = modal else {
+                    unreachable!("Step::NavSelect implies Nav variant")
                 };
-                self.state.apply(command, &mut self.store, canvas)?;
+                terminal.close_modal(&self.store)?;
+                self.focus.pop_scope();
+                let canvas = terminal.canvas_metrics();
+                if let Some(command) = on_select(target, &mut self.state) {
+                    self.state.apply(command, &mut self.store, canvas)?;
+                }
                 self.request_active_render();
                 terminal.render(&self.frame_with_progress(), &mut self.store)?;
                 Ok(())
             }
-            NavOutcome::Cancel => {
-                terminal.close_picker(&self.store)?;
-                self.picker_slot = None;
+            Step::NavCancel => {
+                self.active_modal = None;
+                terminal.close_modal(&self.store)?;
                 self.focus.pop_scope();
+                terminal.render(&self.frame_with_progress(), &mut self.store)?;
+                Ok(())
+            }
+            Step::LogContinue => {
+                if let Some(active) = self.active_modal.as_mut() {
+                    terminal.render_modal(active.as_modal_mut(), &self.store)?;
+                }
+                Ok(())
+            }
+            Step::LogClose => {
+                self.return_to_root();
                 terminal.render(&self.frame_with_progress(), &mut self.store)?;
                 Ok(())
             }
@@ -469,21 +401,9 @@ impl App {
     fn redraw_for_mode(&mut self, terminal: &mut impl TerminalBackend) -> Result<()> {
         let frame = self.frame_with_progress();
         match self.active_scope() {
-            SCOPE_PICKER => {
-                if let Some(slot) = self.picker_slot.as_mut() {
-                    terminal.draw_picker(&mut slot.picker, &self.store)?;
-                }
-                Ok(())
-            }
-            SCOPE_CONNECTION_PICKER => {
-                if let Some(slot) = self.connection_picker_slot.as_mut() {
-                    terminal.draw_connection_picker(&mut slot.picker)?;
-                }
-                Ok(())
-            }
-            SCOPE_LOG => {
-                if let Some(slot) = self.log_slot.as_mut() {
-                    terminal.draw_log_view(&mut slot.view)?;
+            SCOPE_PICKER | SCOPE_CONNECTION_PICKER | SCOPE_LOG => {
+                if let Some(active) = self.active_modal.as_mut() {
+                    terminal.render_modal(active.as_modal_mut(), &self.store)?;
                 }
                 Ok(())
             }
@@ -533,14 +453,14 @@ impl App {
                     items,
                     initial,
                 );
-                let last_hover = picker_inner
+                let initial_hover = picker_inner
                     .selected()
                     .map(|item| item.view_id)
                     .unwrap_or(current);
-                if !self.store.has_rendered(last_hover) {
-                    let path = self.store.view(last_hover).svg_path.clone();
+                if !self.store.has_rendered(initial_hover) {
+                    let path = self.store.view(initial_hover).svg_path.clone();
                     self.scheduler.request(
-                        last_hover,
+                        initial_hover,
                         RenderPriority::Hover,
                         path,
                         self.store.budget(),
@@ -553,13 +473,21 @@ impl App {
                         vec![FocusNode::new("picker-list")],
                     )
                     .expect("picker scope is well-formed");
-                self.picker_slot = Some(PickerSlot {
+                let modal = NavPickerModal {
                     picker: Cached::new(picker_inner),
-                    last_hover,
-                    action: PickerAction::SelectView,
+                    into_target: Box::new(NavTarget::View),
+                    hovered_view: Box::new(|p| p.selected().map(|i| i.view_id)),
+                    thumbnails: Box::new(thumbnails_from_view_picker),
+                };
+                self.active_modal = Some(ActiveModal::Nav {
+                    modal: Box::new(modal),
+                    on_select: Box::new(|target, _state| match target {
+                        NavTarget::View(view_id) => Some(Command::SelectView(view_id)),
+                        _ => None,
+                    }),
                 });
-                if let Some(slot) = self.picker_slot.as_mut() {
-                    terminal.draw_picker(&mut slot.picker, &self.store)?;
+                if let Some(active) = self.active_modal.as_mut() {
+                    terminal.render_modal(active.as_modal_mut(), &self.store)?;
                 }
             }
             Some(Effect::OpenChildViewPicker { target_view_ids }) => {
@@ -591,14 +519,14 @@ impl App {
                     items,
                     initial,
                 );
-                let last_hover = picker_inner
+                let initial_hover = picker_inner
                     .selected()
                     .map(|item| item.view_id)
                     .unwrap_or(initial_view);
-                if !self.store.has_rendered(last_hover) {
-                    let path = self.store.view(last_hover).svg_path.clone();
+                if !self.store.has_rendered(initial_hover) {
+                    let path = self.store.view(initial_hover).svg_path.clone();
                     self.scheduler.request(
-                        last_hover,
+                        initial_hover,
                         RenderPriority::Hover,
                         path,
                         self.store.budget(),
@@ -611,13 +539,21 @@ impl App {
                         vec![FocusNode::new("picker-list")],
                     )
                     .expect("picker scope is well-formed");
-                self.picker_slot = Some(PickerSlot {
+                let modal = NavPickerModal {
                     picker: Cached::new(picker_inner),
-                    last_hover,
-                    action: PickerAction::Drill,
+                    into_target: Box::new(NavTarget::ChildView),
+                    hovered_view: Box::new(|p| p.selected().map(|i| i.view_id)),
+                    thumbnails: Box::new(thumbnails_from_view_picker),
+                };
+                self.active_modal = Some(ActiveModal::Nav {
+                    modal: Box::new(modal),
+                    on_select: Box::new(|target, _state| match target {
+                        NavTarget::ChildView(view_id) => Some(Command::SelectChildView(view_id)),
+                        _ => None,
+                    }),
                 });
-                if let Some(slot) = self.picker_slot.as_mut() {
-                    terminal.draw_picker(&mut slot.picker, &self.store)?;
+                if let Some(active) = self.active_modal.as_mut() {
+                    terminal.render_modal(active.as_modal_mut(), &self.store)?;
                 }
             }
             Some(Effect::OpenConnectionPicker { source_element_id }) => {
@@ -657,11 +593,23 @@ impl App {
                         vec![FocusNode::new("connection-picker-list")],
                     )
                     .expect("connection picker scope is well-formed");
-                self.connection_picker_slot = Some(ConnectionPickerSlot {
+                let modal: NavPickerModal<ConnectionNavItem> = NavPickerModal {
                     picker: Cached::new(picker_inner),
+                    into_target: Box::new(NavTarget::Connection),
+                    hovered_view: Box::new(|_| None),
+                    thumbnails: Box::new(|_| Vec::new()),
+                };
+                self.active_modal = Some(ActiveModal::Nav {
+                    modal: Box::new(modal),
+                    on_select: Box::new(|target, _state| match target {
+                        NavTarget::Connection(candidate) => {
+                            Some(Command::SelectConnection(candidate))
+                        }
+                        _ => None,
+                    }),
                 });
-                if let Some(slot) = self.connection_picker_slot.as_mut() {
-                    terminal.draw_connection_picker(&mut slot.picker)?;
+                if let Some(active) = self.active_modal.as_mut() {
+                    terminal.render_modal(active.as_modal_mut(), &self.store)?;
                 }
             }
             Some(Effect::ReloadWorkspace) => {
@@ -757,6 +705,22 @@ impl App {
         );
         Ok(())
     }
+}
+
+/// Convert a `ViewNavItem` picker's per-frame artifacts into the thumbnail
+/// anchors the terminal layer paints after rendering. Same shape as the
+/// pre-Task-6 inline loop in `TerminalSession::draw_picker`.
+fn thumbnails_from_view_picker(picker: &NavPicker<ViewNavItem>) -> Vec<ThumbnailCellArea> {
+    picker
+        .last_artifacts()
+        .iter()
+        .map(|artifact| match artifact {
+            NavRenderArtifact::Thumbnail { id, area } => ThumbnailCellArea {
+                view_id: id.view_id(),
+                area: *area,
+            },
+        })
+        .collect()
 }
 
 fn coalesce_resize_events(
@@ -1051,13 +1015,13 @@ mod tests {
             vec![
                 FakeTerminalCall::Render(ViewId::first()),
                 FakeTerminalCall::TeardownImageViewport(ViewId::first()),
-                FakeTerminalCall::DrawPicker,
-                FakeTerminalCall::DrawPicker,
-                FakeTerminalCall::ClosePicker,
+                FakeTerminalCall::RenderModal,
+                FakeTerminalCall::RenderModal,
+                FakeTerminalCall::CloseModal,
                 FakeTerminalCall::Render(ViewId::new(1)),
             ]
         );
-        assert!(terminal.picker_draws >= 1);
+        assert!(terminal.modal_renders >= 1);
     }
 
     #[test]
@@ -1079,8 +1043,8 @@ mod tests {
             vec![
                 FakeTerminalCall::Render(ViewId::first()),
                 FakeTerminalCall::TeardownImageViewport(ViewId::first()),
-                FakeTerminalCall::DrawPicker,
-                FakeTerminalCall::ClosePicker,
+                FakeTerminalCall::RenderModal,
+                FakeTerminalCall::CloseModal,
                 FakeTerminalCall::Render(ViewId::first()),
             ]
         );
@@ -1108,9 +1072,9 @@ mod tests {
             terminal.calls,
             vec![
                 FakeTerminalCall::TeardownImageViewport(ViewId::first()),
-                FakeTerminalCall::DrawPicker,
-                FakeTerminalCall::DrawPicker,
-                FakeTerminalCall::ClosePicker,
+                FakeTerminalCall::RenderModal,
+                FakeTerminalCall::RenderModal,
+                FakeTerminalCall::CloseModal,
                 FakeTerminalCall::Render(ViewId::new(2)),
             ]
         );
@@ -1136,8 +1100,8 @@ mod tests {
             terminal.calls,
             vec![
                 FakeTerminalCall::TeardownImageViewport(ViewId::first()),
-                FakeTerminalCall::DrawPicker,
-                FakeTerminalCall::ClosePicker,
+                FakeTerminalCall::RenderModal,
+                FakeTerminalCall::CloseModal,
                 FakeTerminalCall::Render(ViewId::first()),
             ]
         );
@@ -1166,8 +1130,8 @@ mod tests {
             vec![
                 FakeTerminalCall::Render(ViewId::first()),
                 FakeTerminalCall::TeardownImageViewport(ViewId::first()),
-                FakeTerminalCall::DrawConnectionPicker,
-                FakeTerminalCall::CloseConnectionPicker,
+                FakeTerminalCall::RenderModal,
+                FakeTerminalCall::CloseModal,
                 FakeTerminalCall::Render(ViewId::new(1)),
             ]
         );
@@ -1193,8 +1157,8 @@ mod tests {
             vec![
                 FakeTerminalCall::Render(ViewId::first()),
                 FakeTerminalCall::TeardownImageViewport(ViewId::first()),
-                FakeTerminalCall::DrawConnectionPicker,
-                FakeTerminalCall::CloseConnectionPicker,
+                FakeTerminalCall::RenderModal,
+                FakeTerminalCall::CloseModal,
                 FakeTerminalCall::Render(ViewId::first()),
             ]
         );
@@ -1223,8 +1187,8 @@ mod tests {
             vec![
                 FakeTerminalCall::Render(ViewId::first()),
                 FakeTerminalCall::TeardownImageViewport(ViewId::first()),
-                FakeTerminalCall::DrawConnectionPicker,
-                FakeTerminalCall::CloseConnectionPicker,
+                FakeTerminalCall::RenderModal,
+                FakeTerminalCall::CloseModal,
                 FakeTerminalCall::Render(ViewId::first()),
             ]
         );
