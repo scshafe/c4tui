@@ -9,6 +9,7 @@ mod ids;
 mod keymap;
 mod log_view;
 mod logger;
+mod modal;
 mod nav_items;
 mod nav_picker;
 mod render;

@@ -6,6 +6,7 @@ use crate::ids::ViewId;
 use crate::keymap::{KeyMap, KeyMapExt};
 use crate::log_view::{LogView, LogViewOutcome};
 use crate::logger::SharedLogBuffer;
+use crate::modal::ActiveModal;
 use crate::nav_items::{ConnectionNavItem, ViewNavItem};
 use crate::nav_picker::{NavOutcome, NavPicker, NavPickerConfig, NavPickerMode};
 use crate::render_pool::{RenderPriority, RenderScheduler};
@@ -74,6 +75,9 @@ pub struct App {
     connection_picker_slot: Option<ConnectionPickerSlot>,
     dialog_slot: Option<DialogSlot>,
     log_slot: Option<LogSlot>,
+    // Parallel to the four slots above; wired in Task 6.
+    #[allow(dead_code)]
+    active_modal: Option<ActiveModal>,
     log_buffer: SharedLogBuffer,
     clipboard: Box<dyn Clipboard>,
 }
@@ -126,6 +130,7 @@ impl App {
             connection_picker_slot: None,
             dialog_slot: None,
             log_slot: None,
+            active_modal: None,
             log_buffer,
             clipboard,
         }

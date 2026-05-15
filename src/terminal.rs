@@ -399,7 +399,7 @@ impl TerminalBackend for TerminalSession {
 // Drop handled by tui_kit::terminal::Terminal: leaves alt-screen, disables
 // mouse capture, restores cursor, exits raw mode, shuts down image registry.
 
-fn render_log_view(
+pub(crate) fn render_log_view(
     area: Rect,
     buf: &mut ratatui::buffer::Buffer,
     log_view: &mut LogView,
