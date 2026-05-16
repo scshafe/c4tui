@@ -54,7 +54,7 @@ impl AppState {
                 result.render = false;
             }
             Command::OpenPicker => {
-                result.effect = Some(Effect::OpenPicker);
+                result.effect = Some(Effect::OpenModal(ModalSpec::View));
                 result.render = false;
             }
             Command::SelectView(next) => {
@@ -127,9 +127,9 @@ impl AppState {
                             self.navigate_child_view(*child);
                         }
                         children => {
-                            result.effect = Some(Effect::OpenChildViewPicker {
+                            result.effect = Some(Effect::OpenModal(ModalSpec::ChildView {
                                 target_view_ids: children.to_vec(),
-                            });
+                            }));
                             result.render = false;
                         }
                     }
@@ -153,7 +153,9 @@ impl AppState {
                     result.render = false;
                     return Ok(result);
                 };
-                result.effect = Some(Effect::OpenConnectionPicker { source_element_id });
+                result.effect = Some(Effect::OpenModal(ModalSpec::Connection {
+                    source_element_id,
+                }));
                 result.render = false;
             }
             Command::SelectConnection(candidate) => {
@@ -359,13 +361,22 @@ pub struct UpdateResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     Quit,
-    OpenPicker,
-    OpenChildViewPicker { target_view_ids: Vec<ViewId> },
-    OpenConnectionPicker { source_element_id: ElementId },
+    OpenModal(ModalSpec),
     ReloadWorkspace,
     ClearImageCache,
     ShowHelp,
     ToggleLogView,
+}
+
+/// Per-modal payload carried by `Effect::OpenModal`. Each variant maps to one
+/// picker-spawn body in `App::handle_input`. `ShowHelp` and `ToggleLogView`
+/// stay separate from this enum — they don't share the picker shape and
+/// folding them in would force a fake-payload variant here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModalSpec {
+    View,
+    ChildView { target_view_ids: Vec<ViewId> },
+    Connection { source_element_id: ElementId },
 }
 
 impl Default for UpdateResult {
@@ -557,9 +568,9 @@ mod tests {
 
         assert_eq!(
             update.effect,
-            Some(Effect::OpenConnectionPicker {
-                source_element_id: ElementId::new("api")
-            })
+            Some(Effect::OpenModal(ModalSpec::Connection {
+                source_element_id: ElementId::new("api"),
+            }))
         );
         assert!(!update.render);
         assert_eq!(state.current(), ViewId::first());

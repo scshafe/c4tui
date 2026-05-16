@@ -15,11 +15,13 @@
    ```rust
    #[derive(Debug, Clone, PartialEq, Eq)]
    pub enum ModalSpec {
-       ViewPicker,
-       ChildViewPicker { target_view_ids: Vec<ViewId> },
-       ConnectionPicker { source_element_id: ElementId },
+       View,
+       ChildView { target_view_ids: Vec<ViewId> },
+       Connection { source_element_id: ElementId },
    }
    ```
+
+   (Variants drop the `Picker` suffix the original draft used — clippy's `enum_variant_names` flags shared postfixes. The enum name `ModalSpec` already conveys "picker" framing.)
 
    `ShowHelp` and `ToggleLogView` are **not** folded into `ModalSpec`. Help is a `DialogSlot` (separate from `active_modal`); LogView lives under `ActiveModal::Log` but its open path doesn't carry a payload the way pickers do, and conflating "open log" with "open picker" forces a fake-payload variant on `ModalSpec`. Keep them as their own variants on `Effect`.
 

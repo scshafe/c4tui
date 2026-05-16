@@ -12,7 +12,7 @@ use crate::nav_picker::{
     NavPicker, NavPickerConfig, NavPickerMode, NavRenderArtifact, ThumbnailCellArea,
 };
 use crate::render_pool::{RenderPriority, RenderScheduler};
-use crate::state::{AppState, Effect};
+use crate::state::{AppState, Effect, ModalSpec};
 use crate::view::{diagram_placement_policy, ViewStore};
 use crate::workspace::{discover_views, export_workspace, load_workspace_model, WorkspaceSource};
 use anyhow::Result;
@@ -452,191 +452,195 @@ impl App {
             Some(Effect::Quit) => {
                 self.quit = true;
             }
-            Some(Effect::OpenPicker) => {
-                let current = self.state.current();
-                terminal.teardown_image_viewport(current)?;
-                let items = ViewNavItem::collect_all(&self.store.views, &self.store.model);
-                let initial = items
-                    .iter()
-                    .position(|item| item.view_id == current)
-                    .unwrap_or(0);
-                let picker_inner = NavPicker::new(
-                    NavPickerConfig {
-                        id: ComponentId::new("c4tui-view-picker"),
-                        title: " View Picker ".into(),
-                        footer_hint:
-                            " type → filter | Tab → legends | Enter → select | Esc → cancel "
-                                .into(),
-                        default_header: "Pick a view  —  type to filter, Enter to select, Esc to cancel, Tab to toggle key views".into(),
-                        min_cell_cols: 22,
-                        cell_rows: 8,
-                        mode: NavPickerMode::Filterable {
-                            allows_secondary_toggle: true,
-                            secondary_label: "legends",
+            Some(Effect::OpenModal(spec)) => match spec {
+                ModalSpec::View => {
+                    let current = self.state.current();
+                    terminal.teardown_image_viewport(current)?;
+                    let items = ViewNavItem::collect_all(&self.store.views, &self.store.model);
+                    let initial = items
+                        .iter()
+                        .position(|item| item.view_id == current)
+                        .unwrap_or(0);
+                    let picker_inner = NavPicker::new(
+                        NavPickerConfig {
+                            id: ComponentId::new("c4tui-view-picker"),
+                            title: " View Picker ".into(),
+                            footer_hint:
+                                " type → filter | Tab → legends | Enter → select | Esc → cancel "
+                                    .into(),
+                            default_header: "Pick a view  —  type to filter, Enter to select, Esc to cancel, Tab to toggle key views".into(),
+                            min_cell_cols: 22,
+                            cell_rows: 8,
+                            mode: NavPickerMode::Filterable {
+                                allows_secondary_toggle: true,
+                                secondary_label: "legends",
+                            },
                         },
-                    },
-                    items,
-                    initial,
-                );
-                let initial_hover = picker_inner
-                    .selected()
-                    .map(|item| item.view_id)
-                    .unwrap_or(current);
-                if !self.store.has_rendered(initial_hover) {
-                    let path = self.store.view(initial_hover).svg_path.clone();
-                    self.scheduler.request(
-                        initial_hover,
-                        RenderPriority::Hover,
-                        path,
-                        self.store.budget(),
+                        items,
+                        initial,
                     );
+                    let initial_hover = picker_inner
+                        .selected()
+                        .map(|item| item.view_id)
+                        .unwrap_or(current);
+                    if !self.store.has_rendered(initial_hover) {
+                        let path = self.store.view(initial_hover).svg_path.clone();
+                        self.scheduler.request(
+                            initial_hover,
+                            RenderPriority::Hover,
+                            path,
+                            self.store.budget(),
+                        );
+                    }
+                    self.focus
+                        .push_scope(
+                            SCOPE_PICKER,
+                            FocusScopeKind::Modal,
+                            vec![FocusNode::new("picker-list")],
+                        )
+                        .expect("picker scope is well-formed");
+                    let modal = NavPickerModal {
+                        picker: Cached::new(picker_inner),
+                        into_target: Box::new(NavTarget::View),
+                        hovered_view: Box::new(|p| p.selected().map(|i| i.view_id)),
+                        thumbnails: Box::new(thumbnails_from_view_picker),
+                    };
+                    self.active_modal = Some(ActiveModal::Nav {
+                        modal: Box::new(modal),
+                        on_select: Box::new(|target, _state| match target {
+                            NavTarget::View(view_id) => Some(Command::SelectView(view_id)),
+                            _ => None,
+                        }),
+                    });
+                    if let Some(active) = self.active_modal.as_mut() {
+                        terminal.render_modal(active.as_modal_mut(), &self.store)?;
+                    }
                 }
-                self.focus
-                    .push_scope(
-                        SCOPE_PICKER,
-                        FocusScopeKind::Modal,
-                        vec![FocusNode::new("picker-list")],
-                    )
-                    .expect("picker scope is well-formed");
-                let modal = NavPickerModal {
-                    picker: Cached::new(picker_inner),
-                    into_target: Box::new(NavTarget::View),
-                    hovered_view: Box::new(|p| p.selected().map(|i| i.view_id)),
-                    thumbnails: Box::new(thumbnails_from_view_picker),
-                };
-                self.active_modal = Some(ActiveModal::Nav {
-                    modal: Box::new(modal),
-                    on_select: Box::new(|target, _state| match target {
-                        NavTarget::View(view_id) => Some(Command::SelectView(view_id)),
-                        _ => None,
-                    }),
-                });
-                if let Some(active) = self.active_modal.as_mut() {
-                    terminal.render_modal(active.as_modal_mut(), &self.store)?;
-                }
-            }
-            Some(Effect::OpenChildViewPicker { target_view_ids }) => {
-                let current = self.state.current();
-                terminal.teardown_image_viewport(current)?;
-                let items = ViewNavItem::collect_for_view_ids(
-                    &self.store.views,
-                    &self.store.model,
-                    &target_view_ids,
-                );
-                let initial_view = target_view_ids.first().copied().unwrap_or(current);
-                let initial = items
-                    .iter()
-                    .position(|item| item.view_id == initial_view)
-                    .unwrap_or(0);
-                let picker_inner = NavPicker::new(
-                    NavPickerConfig {
-                        id: ComponentId::new("c4tui-child-view-picker"),
-                        title: " Related Views ".into(),
-                        footer_hint: " type → filter | Enter → drill | Esc → cancel ".into(),
-                        default_header: "Pick a child view to drill into".into(),
-                        min_cell_cols: 22,
-                        cell_rows: 8,
-                        mode: NavPickerMode::Filterable {
-                            allows_secondary_toggle: false,
-                            secondary_label: "",
+                ModalSpec::ChildView { target_view_ids } => {
+                    let current = self.state.current();
+                    terminal.teardown_image_viewport(current)?;
+                    let items = ViewNavItem::collect_for_view_ids(
+                        &self.store.views,
+                        &self.store.model,
+                        &target_view_ids,
+                    );
+                    let initial_view = target_view_ids.first().copied().unwrap_or(current);
+                    let initial = items
+                        .iter()
+                        .position(|item| item.view_id == initial_view)
+                        .unwrap_or(0);
+                    let picker_inner = NavPicker::new(
+                        NavPickerConfig {
+                            id: ComponentId::new("c4tui-child-view-picker"),
+                            title: " Related Views ".into(),
+                            footer_hint: " type → filter | Enter → drill | Esc → cancel ".into(),
+                            default_header: "Pick a child view to drill into".into(),
+                            min_cell_cols: 22,
+                            cell_rows: 8,
+                            mode: NavPickerMode::Filterable {
+                                allows_secondary_toggle: false,
+                                secondary_label: "",
+                            },
                         },
-                    },
-                    items,
-                    initial,
-                );
-                let initial_hover = picker_inner
-                    .selected()
-                    .map(|item| item.view_id)
-                    .unwrap_or(initial_view);
-                if !self.store.has_rendered(initial_hover) {
-                    let path = self.store.view(initial_hover).svg_path.clone();
-                    self.scheduler.request(
-                        initial_hover,
-                        RenderPriority::Hover,
-                        path,
-                        self.store.budget(),
+                        items,
+                        initial,
                     );
+                    let initial_hover = picker_inner
+                        .selected()
+                        .map(|item| item.view_id)
+                        .unwrap_or(initial_view);
+                    if !self.store.has_rendered(initial_hover) {
+                        let path = self.store.view(initial_hover).svg_path.clone();
+                        self.scheduler.request(
+                            initial_hover,
+                            RenderPriority::Hover,
+                            path,
+                            self.store.budget(),
+                        );
+                    }
+                    self.focus
+                        .push_scope(
+                            SCOPE_PICKER,
+                            FocusScopeKind::Modal,
+                            vec![FocusNode::new("picker-list")],
+                        )
+                        .expect("picker scope is well-formed");
+                    let modal = NavPickerModal {
+                        picker: Cached::new(picker_inner),
+                        into_target: Box::new(NavTarget::ChildView),
+                        hovered_view: Box::new(|p| p.selected().map(|i| i.view_id)),
+                        thumbnails: Box::new(thumbnails_from_view_picker),
+                    };
+                    self.active_modal = Some(ActiveModal::Nav {
+                        modal: Box::new(modal),
+                        on_select: Box::new(|target, _state| match target {
+                            NavTarget::ChildView(view_id) => {
+                                Some(Command::SelectChildView(view_id))
+                            }
+                            _ => None,
+                        }),
+                    });
+                    if let Some(active) = self.active_modal.as_mut() {
+                        terminal.render_modal(active.as_modal_mut(), &self.store)?;
+                    }
                 }
-                self.focus
-                    .push_scope(
-                        SCOPE_PICKER,
-                        FocusScopeKind::Modal,
-                        vec![FocusNode::new("picker-list")],
-                    )
-                    .expect("picker scope is well-formed");
-                let modal = NavPickerModal {
-                    picker: Cached::new(picker_inner),
-                    into_target: Box::new(NavTarget::ChildView),
-                    hovered_view: Box::new(|p| p.selected().map(|i| i.view_id)),
-                    thumbnails: Box::new(thumbnails_from_view_picker),
-                };
-                self.active_modal = Some(ActiveModal::Nav {
-                    modal: Box::new(modal),
-                    on_select: Box::new(|target, _state| match target {
-                        NavTarget::ChildView(view_id) => Some(Command::SelectChildView(view_id)),
-                        _ => None,
-                    }),
-                });
-                if let Some(active) = self.active_modal.as_mut() {
-                    terminal.render_modal(active.as_modal_mut(), &self.store)?;
+                ModalSpec::Connection { source_element_id } => {
+                    let current = self.state.current();
+                    let candidates = self
+                        .store
+                        .connection_candidates_for_element(current, &source_element_id);
+                    let source_element_name = self
+                        .store
+                        .model
+                        .elements
+                        .get(&source_element_id)
+                        .map(|e| e.name.clone())
+                        .unwrap_or_else(|| source_element_id.to_string());
+                    terminal.teardown_image_viewport(current)?;
+                    let items = ConnectionNavItem::collect_from_candidates(candidates, &self.store);
+                    let picker_inner = NavPicker::new(
+                        NavPickerConfig {
+                            id: ComponentId::new("c4tui-connection-picker"),
+                            title: " Connection Picker ".into(),
+                            footer_hint: " Enter → navigate | Esc → cancel ".into(),
+                            default_header: format!(
+                                "Connections for {}  -  Enter to navigate, Esc to cancel",
+                                source_element_name
+                            ),
+                            min_cell_cols: 34,
+                            cell_rows: 5,
+                            mode: NavPickerMode::Flat,
+                        },
+                        items,
+                        0,
+                    );
+                    self.focus
+                        .push_scope(
+                            SCOPE_CONNECTION_PICKER,
+                            FocusScopeKind::Modal,
+                            vec![FocusNode::new("connection-picker-list")],
+                        )
+                        .expect("connection picker scope is well-formed");
+                    let modal: NavPickerModal<ConnectionNavItem> = NavPickerModal {
+                        picker: Cached::new(picker_inner),
+                        into_target: Box::new(NavTarget::Connection),
+                        hovered_view: Box::new(|_| None),
+                        thumbnails: Box::new(|_| Vec::new()),
+                    };
+                    self.active_modal = Some(ActiveModal::Nav {
+                        modal: Box::new(modal),
+                        on_select: Box::new(|target, _state| match target {
+                            NavTarget::Connection(candidate) => {
+                                Some(Command::SelectConnection(candidate))
+                            }
+                            _ => None,
+                        }),
+                    });
+                    if let Some(active) = self.active_modal.as_mut() {
+                        terminal.render_modal(active.as_modal_mut(), &self.store)?;
+                    }
                 }
-            }
-            Some(Effect::OpenConnectionPicker { source_element_id }) => {
-                let current = self.state.current();
-                let candidates = self
-                    .store
-                    .connection_candidates_for_element(current, &source_element_id);
-                let source_element_name = self
-                    .store
-                    .model
-                    .elements
-                    .get(&source_element_id)
-                    .map(|e| e.name.clone())
-                    .unwrap_or_else(|| source_element_id.to_string());
-                terminal.teardown_image_viewport(current)?;
-                let items = ConnectionNavItem::collect_from_candidates(candidates, &self.store);
-                let picker_inner = NavPicker::new(
-                    NavPickerConfig {
-                        id: ComponentId::new("c4tui-connection-picker"),
-                        title: " Connection Picker ".into(),
-                        footer_hint: " Enter → navigate | Esc → cancel ".into(),
-                        default_header: format!(
-                            "Connections for {}  -  Enter to navigate, Esc to cancel",
-                            source_element_name
-                        ),
-                        min_cell_cols: 34,
-                        cell_rows: 5,
-                        mode: NavPickerMode::Flat,
-                    },
-                    items,
-                    0,
-                );
-                self.focus
-                    .push_scope(
-                        SCOPE_CONNECTION_PICKER,
-                        FocusScopeKind::Modal,
-                        vec![FocusNode::new("connection-picker-list")],
-                    )
-                    .expect("connection picker scope is well-formed");
-                let modal: NavPickerModal<ConnectionNavItem> = NavPickerModal {
-                    picker: Cached::new(picker_inner),
-                    into_target: Box::new(NavTarget::Connection),
-                    hovered_view: Box::new(|_| None),
-                    thumbnails: Box::new(|_| Vec::new()),
-                };
-                self.active_modal = Some(ActiveModal::Nav {
-                    modal: Box::new(modal),
-                    on_select: Box::new(|target, _state| match target {
-                        NavTarget::Connection(candidate) => {
-                            Some(Command::SelectConnection(candidate))
-                        }
-                        _ => None,
-                    }),
-                });
-                if let Some(active) = self.active_modal.as_mut() {
-                    terminal.render_modal(active.as_modal_mut(), &self.store)?;
-                }
-            }
+            },
             Some(Effect::ReloadWorkspace) => {
                 terminal
                     .show_message("Reloading workspace...", "Re-running Structurizr export.")?;
