@@ -90,28 +90,58 @@ Commit: `collapse PendingCommand into Command (drop 70-line identity resolve)`.
 
 ---
 
-## Task 2 — Lift cycling effects into `AppState::apply`
+## Task 2 — Short-circuit cycling commands at the App layer
 
 **Files:** `src/state.rs`, `src/app.rs`.
 
-### Step 2.1 — Find the cycling targets on `AppState`
+**Plan amendment (2026-05-16):** the original plan said "lift cycling into `AppState::apply`." Ground-truth at `src/app.rs:645–658` shows the targets aren't on `AppState` — they're on `self.config.placement` (an `AppConfig` field) and `self.config.zoom`, and `CycleZoomStep` *also* rebuilds `self.keymap`. Pushing those into `AppState::apply` would force `AppState` to gain write authority over `AppConfig` and the keymap — broader surface than the cleanup is worth. Architecturally, the roadmap's intent — "they're pure state, not effects" — is still correct, but the right home for that state is **App**, not **AppState**. Handle the three cycling `Command`s at the top of `App::handle_input` and never enter `AppState::apply` for them.
 
-Locate the state fields that `Effect::CycleScaleBasis`/`CycleOverflow`/`CycleZoomStep` mutate in `src/app.rs:646–660`. Each effect arm flips a field on `AppState` (or on a substate the app holds). Lift that mutation into `AppState::apply`.
+### Step 2.1 — Short-circuit cycling in `App::handle_input`
 
-### Step 2.2 — Replace effect-emit with direct mutation
+In `src/app.rs:415–423`, before the existing `self.state.apply(...)` call, pattern-match the three cycling `Command` variants and handle them directly:
 
-In `src/state.rs`, replace these three lines with direct field-cycling:
+```rust
+let canvas = terminal.canvas_metrics();
+let command = self.keymap.resolve(input, canvas);
 
-- Line 88: `result.effect = Some(Effect::CycleScaleBasis);` → cycle the basis field on `self` (or the appropriate substate). Set `result.render = true` if a re-render is needed.
-- Line 92: `result.effect = Some(Effect::CycleOverflow);` → cycle the overflow field.
-- Line 96: `result.effect = Some(Effect::CycleZoomStep);` → cycle the zoom-step field.
+match command {
+    Command::CycleScaleBasis => {
+        self.config.placement.scale_basis = self.config.placement.scale_basis.cycle_next();
+        self.apply_placement_change();
+        self.request_active_render();
+        terminal.render(&self.frame_with_progress(), &mut self.store)?;
+        return Ok(());
+    }
+    Command::CycleOverflow => {
+        self.config.placement.overflow = self.config.placement.overflow.cycle_next();
+        self.apply_placement_change();
+        self.request_active_render();
+        terminal.render(&self.frame_with_progress(), &mut self.store)?;
+        return Ok(());
+    }
+    Command::CycleZoomStep => {
+        self.config.zoom = self.config.zoom.cycle_next();
+        self.keymap = <KeyMap as KeyMapExt>::from_app_config(&self.config);
+        self.request_active_render();
+        terminal.render(&self.frame_with_progress(), &mut self.store)?;
+        return Ok(());
+    }
+    _ => {}
+}
 
-The cycling logic currently lives in `src/app.rs:646–660`; move it (or refactor into small helpers on `AppState`).
+let update = self.state.apply(command, &mut self.store, canvas)?;
+```
 
-### Step 2.3 — Delete the variants and the app-side arms
+The cycling commands are now handled entirely in `App` and don't pass through `AppState`. The three lines `self.request_active_render(); ... terminal.render(...)` mirror the exact behavior the old `Effect::Cycle*` arms produced.
+
+### Step 2.2 — Drop the three Command-to-Effect arms in `AppState::apply`
+
+In `src/state.rs:87–98`, delete the three cycling arms. `AppState::apply` will never see these Commands anymore, so the match becomes exhaustive without them (Command itself still carries the variants — they're matched at the App layer).
+
+### Step 2.3 — Delete the three Effect variants and their App handlers
 
 - Delete `Effect::CycleScaleBasis`, `Effect::CycleOverflow`, `Effect::CycleZoomStep` from `src/state.rs:378–380`.
-- Delete the three matching arms in `src/app.rs:646–660`.
+- Delete the matching arms in `src/app.rs:645–659` (now replaced by the short-circuit in Step 2.1).
 
 ### Step 2.4 — Verify and commit
 
@@ -121,7 +151,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 ```
 
-Commit: `lift cycling effects into AppState; Effect drops 3 variants`.
+Commit: `short-circuit cycling commands at App; Effect drops 3 variants`.
 
 ---
 

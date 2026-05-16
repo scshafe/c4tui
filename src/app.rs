@@ -419,6 +419,32 @@ impl App {
     ) -> Result<()> {
         let canvas = terminal.canvas_metrics();
         let command = self.keymap.resolve(input, canvas);
+
+        match command {
+            Command::CycleScaleBasis => {
+                self.config.placement.scale_basis = self.config.placement.scale_basis.cycle_next();
+                self.apply_placement_change();
+                self.request_active_render();
+                terminal.render(&self.frame_with_progress(), &mut self.store)?;
+                return Ok(());
+            }
+            Command::CycleOverflow => {
+                self.config.placement.overflow = self.config.placement.overflow.cycle_next();
+                self.apply_placement_change();
+                self.request_active_render();
+                terminal.render(&self.frame_with_progress(), &mut self.store)?;
+                return Ok(());
+            }
+            Command::CycleZoomStep => {
+                self.config.zoom = self.config.zoom.cycle_next();
+                self.keymap = <KeyMap as KeyMapExt>::from_app_config(&self.config);
+                self.request_active_render();
+                terminal.render(&self.frame_with_progress(), &mut self.store)?;
+                return Ok(());
+            }
+            _ => {}
+        }
+
         let update = self.state.apply(command, &mut self.store, canvas)?;
         self.request_active_render();
 
@@ -641,21 +667,6 @@ impl App {
             Some(Effect::ToggleLogView) => {
                 self.toggle_log_view();
                 self.redraw_for_mode(terminal)?;
-            }
-            Some(Effect::CycleScaleBasis) => {
-                self.config.placement.scale_basis = self.config.placement.scale_basis.cycle_next();
-                self.apply_placement_change();
-                terminal.render(&self.frame_with_progress(), &mut self.store)?;
-            }
-            Some(Effect::CycleOverflow) => {
-                self.config.placement.overflow = self.config.placement.overflow.cycle_next();
-                self.apply_placement_change();
-                terminal.render(&self.frame_with_progress(), &mut self.store)?;
-            }
-            Some(Effect::CycleZoomStep) => {
-                self.config.zoom = self.config.zoom.cycle_next();
-                self.keymap = <KeyMap as KeyMapExt>::from_app_config(&self.config);
-                terminal.render(&self.frame_with_progress(), &mut self.store)?;
             }
             Some(Effect::ShowHelp) => {
                 terminal.show_help(&self.config.keys)?;

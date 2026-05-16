@@ -84,17 +84,8 @@ impl AppState {
                 result.effect = Some(Effect::ToggleLogView);
                 result.render = false;
             }
-            Command::CycleScaleBasis => {
-                result.effect = Some(Effect::CycleScaleBasis);
-                result.render = false;
-            }
-            Command::CycleOverflow => {
-                result.effect = Some(Effect::CycleOverflow);
-                result.render = false;
-            }
-            Command::CycleZoomStep => {
-                result.effect = Some(Effect::CycleZoomStep);
-                result.render = false;
+            Command::CycleScaleBasis | Command::CycleOverflow | Command::CycleZoomStep => {
+                unreachable!("cycling commands are short-circuited in App::handle_input");
             }
             Command::Back => {
                 if let Some(previous) = self.breadcrumbs.pop() {
@@ -375,9 +366,6 @@ pub enum Effect {
     ClearImageCache,
     ShowHelp,
     ToggleLogView,
-    CycleScaleBasis,
-    CycleOverflow,
-    CycleZoomStep,
 }
 
 impl Default for UpdateResult {
