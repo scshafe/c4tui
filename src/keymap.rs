@@ -1,14 +1,14 @@
 #![allow(dead_code)]
 
 use crate::config::{AppConfig, KeyBindings, ZoomConfig};
-use crate::event::{mouse_to_canvas_fraction, PendingCommand};
+use crate::event::{mouse_to_canvas_fraction, Command, ZoomAnchor};
 use tui_kit::input::{InputEvent, MouseEvent};
 use tui_kit::keymap::{KeyMap as KitKeyMap, KeyTrigger, SpecialKey};
 use tui_kit::layout::CanvasMetrics;
 
-/// c4tui's keymap: a `tui_kit::keymap::KeyMap<PendingCommand>` with the
+/// c4tui's keymap: a `tui_kit::keymap::KeyMap<Command>` with the
 /// app-defined `defaults` factory and `resolve` for mouse events.
-pub type KeyMap = KitKeyMap<PendingCommand>;
+pub type KeyMap = KitKeyMap<Command>;
 
 /// Number of terminal rows occupied by the status bar at the top of the
 /// canvas. Used by `resolve` when converting mouse-cell coordinates into
@@ -20,7 +20,7 @@ pub trait KeyMapExt {
     fn defaults(keys: &KeyBindings) -> Self;
     fn defaults_with(keys: &KeyBindings, zoom: ZoomConfig) -> Self;
     fn from_app_config(config: &AppConfig) -> Self;
-    fn resolve(&self, event: InputEvent, canvas: CanvasMetrics) -> PendingCommand;
+    fn resolve(&self, event: InputEvent, canvas: CanvasMetrics) -> Command;
 }
 
 impl KeyMapExt for KeyMap {
@@ -38,63 +38,78 @@ impl KeyMapExt for KeyMap {
         let zoom_in = zoom.in_factor;
         let zoom_out = zoom.out_factor;
 
-        map.bind(KeyTrigger::Special(SpecialKey::CtrlC), PendingCommand::Quit);
-        map.bind(
-            KeyTrigger::Special(SpecialKey::Esc),
-            PendingCommand::ClearOrQuit,
-        );
-        map.bind(KeyTrigger::Special(SpecialKey::Back), PendingCommand::Back);
+        map.bind(KeyTrigger::Special(SpecialKey::CtrlC), Command::Quit);
+        map.bind(KeyTrigger::Special(SpecialKey::Esc), Command::ClearOrQuit);
+        map.bind(KeyTrigger::Special(SpecialKey::Back), Command::Back);
 
-        map.bind(
-            KeyTrigger::CharCaseInsensitive(keys.quit),
-            PendingCommand::Quit,
-        );
+        map.bind(KeyTrigger::CharCaseInsensitive(keys.quit), Command::Quit);
         map.bind(
             KeyTrigger::CharCaseInsensitive(keys.open_picker),
-            PendingCommand::OpenPicker,
+            Command::OpenPicker,
         );
         map.bind(
             KeyTrigger::CharCaseInsensitive(keys.reload),
-            PendingCommand::Reload,
+            Command::Reload,
         );
-        map.bind(
-            KeyTrigger::CharCaseInsensitive(keys.help),
-            PendingCommand::Help,
-        );
-        map.bind(KeyTrigger::Char('K'), PendingCommand::ShowLegend);
-        map.bind(KeyTrigger::Char('L'), PendingCommand::ToggleLog);
-        map.bind(KeyTrigger::Char('B'), PendingCommand::CycleScaleBasis);
-        map.bind(KeyTrigger::Char('O'), PendingCommand::CycleOverflow);
-        map.bind(KeyTrigger::Char('Z'), PendingCommand::CycleZoomStep);
+        map.bind(KeyTrigger::CharCaseInsensitive(keys.help), Command::Help);
+        map.bind(KeyTrigger::Char('K'), Command::ShowLegend);
+        map.bind(KeyTrigger::Char('L'), Command::ToggleLog);
+        map.bind(KeyTrigger::Char('B'), Command::CycleScaleBasis);
+        map.bind(KeyTrigger::Char('O'), Command::CycleOverflow);
+        map.bind(KeyTrigger::Char('Z'), Command::CycleZoomStep);
         map.bind(
             KeyTrigger::Special(SpecialKey::Enter),
-            PendingCommand::OpenConnectionPicker,
+            Command::OpenConnectionPicker,
         );
-        map.bind(KeyTrigger::Char('i'), PendingCommand::Inspect);
-        map.bind(KeyTrigger::Char('I'), PendingCommand::Inspect);
+        map.bind(
+            KeyTrigger::Char('i'),
+            Command::InspectAt {
+                canvas_x: 0.5,
+                canvas_y: 0.5,
+            },
+        );
+        map.bind(
+            KeyTrigger::Char('I'),
+            Command::InspectAt {
+                canvas_x: 0.5,
+                canvas_y: 0.5,
+            },
+        );
         map.bind(
             KeyTrigger::Char(keys.zoom_in),
-            PendingCommand::Zoom { factor: zoom_in },
+            Command::Zoom {
+                factor: zoom_in,
+                anchor: ZoomAnchor::Center,
+            },
         );
         map.bind(
             KeyTrigger::Char('='),
-            PendingCommand::Zoom { factor: zoom_in },
+            Command::Zoom {
+                factor: zoom_in,
+                anchor: ZoomAnchor::Center,
+            },
         );
         map.bind(
             KeyTrigger::Char(keys.zoom_out),
-            PendingCommand::Zoom { factor: zoom_out },
+            Command::Zoom {
+                factor: zoom_out,
+                anchor: ZoomAnchor::Center,
+            },
         );
         map.bind(
             KeyTrigger::Char('_'),
-            PendingCommand::Zoom { factor: zoom_out },
+            Command::Zoom {
+                factor: zoom_out,
+                anchor: ZoomAnchor::Center,
+            },
         );
         map.bind(
             KeyTrigger::CharCaseInsensitive(keys.reset),
-            PendingCommand::ResetView,
+            Command::ResetView,
         );
         map.bind(
             KeyTrigger::CharCaseInsensitive(keys.fit),
-            PendingCommand::ResetView,
+            Command::ResetView,
         );
 
         for (trigger, dx, dy) in [
@@ -109,7 +124,7 @@ impl KeyMapExt for KeyMap {
         ] {
             map.bind(
                 trigger,
-                PendingCommand::Pan {
+                Command::Pan {
                     dx_fraction: dx,
                     dy_fraction: dy,
                 },
@@ -119,41 +134,39 @@ impl KeyMapExt for KeyMap {
         map
     }
 
-    fn resolve(&self, event: InputEvent, canvas: CanvasMetrics) -> PendingCommand {
+    fn resolve(&self, event: InputEvent, canvas: CanvasMetrics) -> Command {
         match event {
-            InputEvent::Key(key) => self.lookup(key).unwrap_or(PendingCommand::Noop),
+            InputEvent::Key(key) => self.lookup(key).unwrap_or(Command::Noop),
             InputEvent::Mouse(MouseEvent::Click { x, y }) => {
                 match mouse_to_canvas_fraction(MouseEvent::Click { x, y }, canvas, STATUS_ROWS) {
-                    Some((canvas_x, canvas_y)) => PendingCommand::DrillAt { canvas_x, canvas_y },
-                    None => PendingCommand::Noop,
+                    Some((canvas_x, canvas_y)) => Command::DrillAt { canvas_x, canvas_y },
+                    None => Command::Noop,
                 }
             }
             InputEvent::Mouse(MouseEvent::WheelUp { x, y }) => {
                 match mouse_to_canvas_fraction(MouseEvent::WheelUp { x, y }, canvas, STATUS_ROWS) {
-                    Some((canvas_x, canvas_y)) => PendingCommand::ZoomAt {
+                    Some((canvas_x, canvas_y)) => Command::Zoom {
                         factor: 1.25,
-                        canvas_x,
-                        canvas_y,
+                        anchor: ZoomAnchor::Canvas { canvas_x, canvas_y },
                     },
-                    None => PendingCommand::Noop,
+                    None => Command::Noop,
                 }
             }
             InputEvent::Mouse(MouseEvent::WheelDown { x, y }) => {
                 match mouse_to_canvas_fraction(MouseEvent::WheelDown { x, y }, canvas, STATUS_ROWS)
                 {
-                    Some((canvas_x, canvas_y)) => PendingCommand::ZoomAt {
+                    Some((canvas_x, canvas_y)) => Command::Zoom {
                         factor: 0.8,
-                        canvas_x,
-                        canvas_y,
+                        anchor: ZoomAnchor::Canvas { canvas_x, canvas_y },
                     },
-                    None => PendingCommand::Noop,
+                    None => Command::Noop,
                 }
             }
-            InputEvent::Mouse(MouseEvent::Drag { x, y }) => PendingCommand::DragTo { x, y },
-            InputEvent::Mouse(MouseEvent::Release) => PendingCommand::EndDrag,
+            InputEvent::Mouse(MouseEvent::Drag { x, y }) => Command::DragTo { x, y, canvas },
+            InputEvent::Mouse(MouseEvent::Release) => Command::EndDrag,
             // Resize is delivered through AppEvent::Terminal, not through
             // keymap resolution. If it ever reaches here it is a no-op.
-            InputEvent::Resize { .. } => PendingCommand::Noop,
+            InputEvent::Resize { .. } => Command::Noop,
         }
     }
 }
@@ -192,7 +205,7 @@ mod tests {
 
         assert!(matches!(
             map.lookup(KeyEvent::Enter),
-            Some(PendingCommand::OpenConnectionPicker)
+            Some(Command::OpenConnectionPicker)
         ));
     }
 
@@ -201,29 +214,26 @@ mod tests {
         let map = defaults();
         assert!(matches!(
             map.lookup(KeyEvent::Char('q')),
-            Some(PendingCommand::Quit)
+            Some(Command::Quit)
         ));
         assert!(matches!(
             map.lookup(KeyEvent::Char('Q')),
-            Some(PendingCommand::Quit)
+            Some(Command::Quit)
         ));
-        assert!(matches!(
-            map.lookup(KeyEvent::CtrlC),
-            Some(PendingCommand::Quit)
-        ));
+        assert!(matches!(map.lookup(KeyEvent::CtrlC), Some(Command::Quit)));
         assert!(matches!(
             map.lookup(KeyEvent::Esc),
-            Some(PendingCommand::ClearOrQuit)
+            Some(Command::ClearOrQuit)
         ));
     }
 
     #[test]
     fn last_binding_wins_for_overrides() {
         let mut map = defaults();
-        map.bind(KeyTrigger::Char('q'), PendingCommand::OpenPicker);
+        map.bind(KeyTrigger::Char('q'), Command::OpenPicker);
         assert!(matches!(
             map.lookup(KeyEvent::Char('q')),
-            Some(PendingCommand::OpenPicker)
+            Some(Command::OpenPicker)
         ));
     }
 
@@ -239,18 +249,21 @@ mod tests {
         let canvas = test_canvas();
         assert!(matches!(
             map.resolve(InputEvent::Mouse(MouseEvent::Click { x: 8, y: 12 }), canvas),
-            PendingCommand::DrillAt { .. }
+            Command::DrillAt { .. }
         ));
         assert!(matches!(
             map.resolve(
                 InputEvent::Mouse(MouseEvent::WheelUp { x: 40, y: 12 }),
                 canvas
             ),
-            PendingCommand::ZoomAt { .. }
+            Command::Zoom {
+                anchor: ZoomAnchor::Canvas { .. },
+                ..
+            }
         ));
         assert!(matches!(
             map.resolve(InputEvent::Mouse(MouseEvent::Release), canvas),
-            PendingCommand::EndDrag
+            Command::EndDrag
         ));
     }
 }

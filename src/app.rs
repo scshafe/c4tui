@@ -418,8 +418,7 @@ impl App {
         terminal: &mut impl TerminalBackend,
     ) -> Result<()> {
         let canvas = terminal.canvas_metrics();
-        let pending = self.keymap.resolve(input, canvas);
-        let command = pending.resolve(canvas);
+        let command = self.keymap.resolve(input, canvas);
         let update = self.state.apply(command, &mut self.store, canvas)?;
         self.request_active_render();
 
