@@ -1,16 +1,14 @@
 //! Generic, keyboard-driven picker over any type implementing [`NavItem`].
 //!
-//! NavPicker is the substrate for the three near-identical c4tui pickers
-//! (`ViewPicker`, `ConnectionPicker`, and the inline child-view picker spawned
-//! by the `OpenChildViewPicker` effect). Item-type specialisation happens
-//! entirely through the [`NavItem`] trait; layout, filter, scroll, and key
-//! handling live here once.
+//! NavPicker is the substrate for c4tui's keyboard navigation surfaces:
+//! the global view picker, the inline child-view picker spawned by
+//! `OpenChildViewPicker`, and the link directory. Item-type specialisation
+//! happens entirely through the [`NavItem`] trait; layout, filter, scroll,
+//! and key handling live here once.
 //!
 //! This file is introduced by Phase 3 Task 1 Step 1.2 (trait + struct) and
 //! Step 1.3 (TDD coverage of filter / arrow / Tab / Esc / Enter behavior).
-//! The three concrete `NavItem` impls live in `nav_items.rs` and arrive in
-//! Step 1.4. Migration of the existing pickers to NavPicker is deferred to
-//! Tasks 2-4 -- nothing downstream constrains this file yet.
+//! Concrete `NavItem` impls live next to their app-specific item types.
 
 #![allow(dead_code)]
 
@@ -40,9 +38,8 @@ pub enum NavOutcome<T> {
 /// (`Output` + `outcome`).
 ///
 /// Item types are deliberately concrete c4tui structs (`ViewNavItem`,
-/// `ConnectionNavItem`). Future Phase 5 work may add a third
-/// (`LinkCandidate`). Adding more is one `impl NavItem` block -- no
-/// changes to NavPicker itself.
+/// `LinkCandidate`). Adding more is one `impl NavItem` block -- no changes
+/// to NavPicker itself.
 pub trait NavItem: Clone {
     /// What `Enter` produces when this item is selected.
     type Output: Clone;
@@ -52,8 +49,7 @@ pub trait NavItem: Clone {
     fn filter_text(&self) -> &str;
 
     /// Optional grouping section. Items with the same group sort together
-    /// under a `── Group ──` header. `None` means "no header for this item"
-    /// (used by ConnectionNavItem, which is flat).
+    /// under a `── Group ──` header. `None` means "no header for this item".
     fn group(&self) -> Option<&str> {
         None
     }
@@ -184,7 +180,7 @@ impl<'canvas, 'buf> NavCellCanvas<'canvas, 'buf> {
 /// `Filterable` picker accepts free-form filter typing and (optionally)
 /// toggles legend/secondary items with Tab. A `Flat` picker ignores `Char`,
 /// `Back`, and `Tab` keys -- it is pure arrow-and-Enter navigation over a
-/// fixed list, used today by ConnectionPicker.
+/// fixed list.
 #[derive(Debug, Clone)]
 pub enum NavPickerMode {
     Filterable {

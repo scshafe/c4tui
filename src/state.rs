@@ -1,6 +1,7 @@
 use crate::event::{Command, ZoomAnchor};
 use crate::ids::{ElementId, ViewId};
-use crate::view::{ConnectionNavigationCandidate, ViewStore};
+use crate::link_directory::LinkCandidate;
+use crate::view::ViewStore;
 use anyhow::Result;
 use tui_kit::layout::{CanvasMetrics, ViewTransform};
 
@@ -26,6 +27,10 @@ impl Default for AppState {
 impl AppState {
     pub const fn current(&self) -> ViewId {
         self.current
+    }
+
+    pub fn pinned_element(&self) -> Option<&ElementId> {
+        self.pinned_element.as_ref()
     }
 
     pub fn render_frame(&self) -> RenderFrame {
@@ -57,6 +62,10 @@ impl AppState {
                 result.effect = Some(Effect::OpenModal(ModalSpec::View));
                 result.render = false;
             }
+            Command::OpenLinkDirectory => {
+                result.effect = Some(Effect::OpenModal(ModalSpec::Link));
+                result.render = false;
+            }
             Command::SelectView(next) => {
                 self.current = next;
                 self.breadcrumbs.clear();
@@ -64,6 +73,9 @@ impl AppState {
             }
             Command::SelectChildView(next) => {
                 self.navigate_child_view(next);
+            }
+            Command::SelectLink(candidate) => {
+                self.navigate_link(candidate);
             }
             Command::Reload => {
                 result.effect = Some(Effect::ReloadWorkspace);
@@ -144,23 +156,6 @@ impl AppState {
                     result.render = false;
                 }
             }
-            Command::OpenConnectionPicker => {
-                let source_element_id = match self.pinned_element.clone() {
-                    Some(element) => Some(element),
-                    None => store.element_at_canvas_point(self.current, 0.5, 0.5, canvas)?,
-                };
-                let Some(source_element_id) = source_element_id else {
-                    result.render = false;
-                    return Ok(result);
-                };
-                result.effect = Some(Effect::OpenModal(ModalSpec::Connection {
-                    source_element_id,
-                }));
-                result.render = false;
-            }
-            Command::SelectConnection(candidate) => {
-                self.navigate_connection(candidate);
-            }
             Command::ClearOrQuit => {
                 if self.pinned_element.is_some() {
                     self.pinned_element = None;
@@ -209,11 +204,11 @@ impl AppState {
         Ok(result)
     }
 
-    fn navigate_connection(&mut self, candidate: ConnectionNavigationCandidate) {
+    fn navigate_link(&mut self, candidate: LinkCandidate) {
         self.breadcrumbs.push(self.current);
-        self.current = candidate.view_id;
+        self.current = candidate.target_view;
         self.last_drag = None;
-        self.pinned_element = Some(candidate.connected_element_id);
+        self.pinned_element = candidate.pinned_element_after_navigation;
     }
 
     fn navigate_child_view(&mut self, next: ViewId) {
@@ -376,7 +371,7 @@ pub enum Effect {
 pub enum ModalSpec {
     View,
     ChildView { target_view_ids: Vec<ViewId> },
-    Connection { source_element_id: ElementId },
+    Link,
 }
 
 impl Default for UpdateResult {
@@ -396,6 +391,7 @@ impl Default for UpdateResult {
 mod tests {
     use super::*;
     use crate::ids::{ElementId, RelationshipId};
+    use crate::link_directory::LinkKind;
     use crate::render::RasterBudget;
     use crate::workspace::{RelationshipMetadata, ViewInfo, WorkspaceModel};
     use std::collections::{HashMap, HashSet};
@@ -555,7 +551,7 @@ mod tests {
     }
 
     #[test]
-    fn open_connection_picker_uses_pinned_element_without_navigating() {
+    fn open_link_directory_requests_modal_without_navigating() {
         let mut store = connection_store();
         let mut state = AppState {
             pinned_element: Some(ElementId::new("api")),
@@ -563,15 +559,10 @@ mod tests {
         };
 
         let update = state
-            .apply(Command::OpenConnectionPicker, &mut store, canvas())
+            .apply(Command::OpenLinkDirectory, &mut store, canvas())
             .unwrap();
 
-        assert_eq!(
-            update.effect,
-            Some(Effect::OpenModal(ModalSpec::Connection {
-                source_element_id: ElementId::new("api"),
-            }))
-        );
+        assert_eq!(update.effect, Some(Effect::OpenModal(ModalSpec::Link)));
         assert!(!update.render);
         assert_eq!(state.current(), ViewId::first());
         assert!(state.render_frame().breadcrumbs.is_empty());
@@ -582,17 +573,21 @@ mod tests {
     }
 
     #[test]
-    fn select_connection_navigates_and_sets_connected_element() {
+    fn select_link_navigates_and_sets_optional_pin() {
         let mut store = connection_store();
         let mut state = AppState::default();
-        let candidate = store
-            .connection_candidates_for_element(ViewId::first(), &ElementId::new("api"))
-            .into_iter()
-            .next()
-            .unwrap();
+        let candidate = LinkCandidate {
+            kind: LinkKind::ConnectionOutgoing,
+            target_view: ViewId::new(1),
+            source_element: Some(ElementId::new("api")),
+            label: "Database".to_owned(),
+            detail: Some("to Database".to_owned()),
+            pinned_element_after_navigation: Some(ElementId::new("database")),
+            secondary_tokens: Vec::new(),
+        };
 
         state
-            .apply(Command::SelectConnection(candidate), &mut store, canvas())
+            .apply(Command::SelectLink(candidate), &mut store, canvas())
             .unwrap();
 
         assert_eq!(state.current(), ViewId::new(1));

@@ -1,5 +1,5 @@
 use crate::ids::ViewId;
-use crate::view::ConnectionNavigationCandidate;
+use crate::link_directory::LinkCandidate;
 use tui_kit::input::MouseEvent;
 use tui_kit::layout::CanvasMetrics;
 
@@ -37,16 +37,16 @@ pub enum ZoomAnchor {
 pub enum Command {
     Quit,
     OpenPicker,
+    OpenLinkDirectory,
     SelectView(ViewId),
     SelectChildView(ViewId),
+    SelectLink(LinkCandidate),
     Reload,
     ReloadSucceeded,
     ReloadFailed,
     Help,
     Back,
     ShowLegend,
-    OpenConnectionPicker,
-    SelectConnection(ConnectionNavigationCandidate),
     InspectAt {
         canvas_x: f32,
         canvas_y: f32,

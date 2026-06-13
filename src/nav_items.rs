@@ -3,8 +3,8 @@
 //!
 //! Step 1.1 introduced the [`NavTarget`] enum and empty struct shells.
 //! Step 1.4 landed the concrete fields and `impl NavItem` blocks
-//! (`ViewNavItem`, `ConnectionNavItem`) plus one real-typed test per item
-//! that exercises the trait surface against the production types.
+//! plus real-typed tests that exercise the trait surface against the
+//! production types.
 //!
 //! Task 3 (Phase F) collapsed the original `ChildViewNavItem(pub ViewNavItem)`
 //! newtype into `ViewNavItem`: both the top-level and child-view pickers
@@ -17,8 +17,8 @@
 use ratatui::style::{Modifier, Style};
 
 use crate::ids::ViewId;
+use crate::link_directory::LinkCandidate;
 use crate::nav_picker::{truncate, NavCellCanvas, NavItem, NavRenderArtifact, ThumbnailId};
-use crate::view::ConnectionNavigationCandidate;
 use crate::workspace::{ViewInfo, ViewKind, WorkspaceModel};
 
 const THUMB_ROWS: u16 = 5;
@@ -29,9 +29,8 @@ const THUMB_ROWS: u16 = 5;
 /// callback (`ModalSlot::on_select`, introduced in Task 5) matches on this
 /// variant to produce a `Command`.
 ///
-/// Phase 5 will add a `Link(LinkCandidate)` variant for connection-link
-/// navigation; the spawn-site closure is the only seam that needs to learn
-/// about the new variant.
+/// The spawn-site closure is the only seam that needs to learn about each
+/// variant.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NavTarget {
     /// A view selected from the top-level view picker (clears breadcrumbs).
@@ -39,11 +38,8 @@ pub enum NavTarget {
     /// A view selected from the child-view picker spawned on multi-child drill
     /// (pushes a breadcrumb).
     ChildView(ViewId),
-    /// A connection candidate selected from the connection picker (pushes a
-    /// breadcrumb and pins the connected element).
-    Connection(ConnectionNavigationCandidate),
-    // Phase 5 will add:
-    //   Link(LinkCandidate),
+    /// A link-directory candidate selected from the keyboard-first directory.
+    Link(LinkCandidate),
 }
 
 /// Item that yields `NavTarget::View(...)` when selected from the top-level
@@ -174,113 +170,6 @@ impl NavItem for ViewNavItem {
     }
 }
 
-/// Item that yields `NavTarget::Connection(...)` when selected from the
-/// connection picker.
-#[derive(Debug, Clone)]
-pub struct ConnectionNavItem {
-    pub candidate: ConnectionNavigationCandidate,
-    pub direction_label: &'static str,
-    pub connected_element_name: String,
-    pub relationship_detail: String,
-    pub target_view: String,
-}
-
-impl ConnectionNavItem {
-    /// Construct `ConnectionNavItem` rows from a candidate list, resolving
-    /// element and relationship names from the `ViewStore`'s workspace
-    /// model.
-    pub fn collect_from_candidates(
-        candidates: Vec<ConnectionNavigationCandidate>,
-        store: &crate::view::ViewStore,
-    ) -> Vec<Self> {
-        use crate::view::ConnectionDirection;
-        candidates
-            .into_iter()
-            .map(|candidate| {
-                let relationship = store.model.relationships.get(&candidate.relationship_id);
-                let connected_element_name = store
-                    .model
-                    .elements
-                    .get(&candidate.connected_element_id)
-                    .map(|element| element.name.clone())
-                    .unwrap_or_else(|| candidate.connected_element_id.to_string());
-                let relationship_detail = match (
-                    relationship.and_then(|rel| rel.description.as_deref()),
-                    relationship.and_then(|rel| rel.technology.as_deref()),
-                ) {
-                    (Some(d), Some(t)) => format!("{d} ({t})"),
-                    (Some(d), None) => d.to_owned(),
-                    (None, Some(t)) => t.to_owned(),
-                    (None, None) => "relationship".to_owned(),
-                };
-                let target_view = store.view(candidate.view_id).name.clone();
-                let direction_label = match candidate.direction {
-                    ConnectionDirection::Outgoing => "to",
-                    ConnectionDirection::Incoming => "from",
-                };
-                Self {
-                    candidate,
-                    direction_label,
-                    connected_element_name,
-                    relationship_detail,
-                    target_view,
-                }
-            })
-            .collect()
-    }
-}
-
-impl NavItem for ConnectionNavItem {
-    type Output = ConnectionNavigationCandidate;
-
-    fn filter_text(&self) -> &str {
-        &self.connected_element_name
-    }
-
-    fn render_into_canvas(
-        &self,
-        mut canvas: NavCellCanvas<'_, '_>,
-        selected: bool,
-        _filter: &str,
-        _sink: &mut dyn FnMut(NavRenderArtifact),
-    ) {
-        let marker = if selected { ">" } else { " " };
-        let title = format!(
-            "{marker} {} {}",
-            self.direction_label, self.connected_element_name
-        );
-        canvas.set_string(
-            0,
-            0,
-            truncate(&title, canvas.width().saturating_sub(1) as usize),
-            canvas.style(),
-        );
-
-        if canvas.height() > 1 {
-            let detail = format!("rel: {}", self.relationship_detail);
-            canvas.set_string(
-                0,
-                1,
-                truncate(&detail, canvas.width().saturating_sub(1) as usize),
-                Style::default(),
-            );
-        }
-        if canvas.height() > 2 {
-            let target = format!("view: {}", self.target_view);
-            canvas.set_string(
-                0,
-                2,
-                truncate(&target, canvas.width().saturating_sub(1) as usize),
-                Style::default().add_modifier(Modifier::DIM),
-            );
-        }
-    }
-
-    fn outcome(&self) -> ConnectionNavigationCandidate {
-        self.candidate.clone()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,9 +177,8 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
 
-    use crate::ids::{ElementId, RelationshipId};
-    use crate::view::{ConnectionDirection, ConnectionNavigationCandidate};
-    use crate::workspace::{ElementKind, ElementMetadata, RelationshipMetadata};
+    use crate::ids::ElementId;
+    use crate::workspace::{ElementKind, ElementMetadata};
 
     fn element(id: &str, name: &str, kind: ElementKind) -> (ElementId, ElementMetadata) {
         let id = ElementId::new(id);
@@ -348,59 +236,6 @@ mod tests {
         assert!(!item.is_secondary());
     }
 
-    #[test]
-    fn connection_nav_item_resolves_names_and_relationship_detail() {
-        // Build a minimal ViewStore so collect_from_candidates can look up
-        // element/relationship metadata and view names.
-        let mut model = WorkspaceModel::default();
-        let (user_id, user_meta) = element("1", "User", ElementKind::Person);
-        let (system_id, system_meta) = element("2", "Billing", ElementKind::SoftwareSystem);
-        model.elements.insert(user_id.clone(), user_meta);
-        model.elements.insert(system_id.clone(), system_meta);
-
-        let rel_id = RelationshipId::new("10");
-        model.relationships.insert(
-            rel_id.clone(),
-            RelationshipMetadata {
-                id: rel_id.clone(),
-                source_id: user_id.clone(),
-                destination_id: system_id.clone(),
-                description: Some("Uses".to_owned()),
-                technology: Some("HTTPS".to_owned()),
-                tags: Vec::new(),
-            },
-        );
-
-        let views = vec![view_info(
-            "landscape",
-            "Landscape",
-            ViewKind::SystemContext,
-            &["1", "2"],
-        )];
-
-        let store = crate::view::ViewStore::new(views, crate::render::RasterBudget::default())
-            .unwrap()
-            .with_model(model);
-
-        let candidate = ConnectionNavigationCandidate {
-            relationship_id: rel_id.clone(),
-            direction: ConnectionDirection::Outgoing,
-            connected_element_id: system_id.clone(),
-            view_id: ViewId::new(0),
-        };
-
-        let items = ConnectionNavItem::collect_from_candidates(vec![candidate.clone()], &store);
-        assert_eq!(items.len(), 1);
-        let item = &items[0];
-
-        assert_eq!(item.filter_text(), "Billing");
-        assert_eq!(item.direction_label, "to");
-        assert_eq!(item.relationship_detail, "Uses (HTTPS)");
-        assert_eq!(item.target_view, "Landscape");
-        assert_eq!(item.outcome(), candidate);
-        assert!(!item.is_secondary());
-    }
-
     /// Locks in the name-only filter surface of `ViewNavItem`. The legacy
     /// `picker.rs` also matched against the view key, kind label, and
     /// description; that wider surface is intentionally NOT inherited. If
@@ -434,60 +269,5 @@ mod tests {
             !secondary_tokens.iter().any(|t| t.contains("description")),
             "description is not part of the filter surface"
         );
-    }
-
-    /// `ConnectionNavItem` filters on the connected element name only.
-    /// The relationship detail, technology, direction label, and target
-    /// view name are NOT in the filter surface.
-    #[test]
-    fn connection_nav_item_filter_text_surface_is_connected_name_only() {
-        let mut model = WorkspaceModel::default();
-        let (user_id, user_meta) = element("1", "User", ElementKind::Person);
-        let (system_id, system_meta) = element("2", "Billing", ElementKind::SoftwareSystem);
-        model.elements.insert(user_id.clone(), user_meta);
-        model.elements.insert(system_id.clone(), system_meta);
-
-        let rel_id = RelationshipId::new("10");
-        model.relationships.insert(
-            rel_id.clone(),
-            RelationshipMetadata {
-                id: rel_id.clone(),
-                source_id: user_id.clone(),
-                destination_id: system_id.clone(),
-                description: Some("ZetaDescription".to_owned()),
-                technology: Some("ZetaTech".to_owned()),
-                tags: Vec::new(),
-            },
-        );
-
-        let views = vec![view_info(
-            "zzz-key",
-            "ZetaView",
-            ViewKind::SystemContext,
-            &["1", "2"],
-        )];
-
-        let store = crate::view::ViewStore::new(views, crate::render::RasterBudget::default())
-            .unwrap()
-            .with_model(model);
-
-        let candidate = ConnectionNavigationCandidate {
-            relationship_id: rel_id.clone(),
-            direction: ConnectionDirection::Outgoing,
-            connected_element_id: system_id.clone(),
-            view_id: ViewId::new(0),
-        };
-
-        let items = ConnectionNavItem::collect_from_candidates(vec![candidate], &store);
-        let item = &items[0];
-
-        assert_eq!(item.filter_text(), "Billing");
-        // Nothing else feeds into the filter surface.
-        assert!(item.secondary_filter_tokens().is_empty());
-        // Sanity-check that relationship/technology/view text exist on the
-        // item but are not in either filter surface.
-        assert!(item.relationship_detail.contains("ZetaDescription"));
-        assert!(item.relationship_detail.contains("ZetaTech"));
-        assert_eq!(item.target_view, "ZetaView");
     }
 }

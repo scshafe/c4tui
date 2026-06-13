@@ -18,18 +18,18 @@ structurizr export -> SVG views + workspace.json metadata
 ViewStore + WorkspaceModel
         |
         v
-InputEvent -> PendingCommand -> Command -> AppState::apply
-                                      |
-                                      +--> Effect -> App side effect
-                                      |
-                                      v
-                               RenderFrame -> TerminalBackend
+InputEvent -> Command -> AppState::apply
+                              |
+                              +--> Effect -> App side effect
+                              |
+                              v
+                       RenderFrame -> TerminalBackend
 ```
 
 The core split is:
 
 - `state.rs` decides how commands change navigation state.
-- `app.rs` performs effects, owns modal slots, and coordinates rendering.
+- `app.rs` performs effects, owns the active modal, and coordinates rendering.
 - `terminal.rs` is the real terminal backend.
 - `backend.rs` defines the backend trait and fake backend used by tests.
 - `tui-kit` supplies input types, focus scopes, component caching, grid widgets,
@@ -102,7 +102,7 @@ For each view:
 
 Hit testing uses the extracted bounding boxes and the active image viewport
 transform. This supports optional mouse drill and element inspection, but the
-keyboard link directory should not depend on mouse hit testing.
+keyboard link directory does not depend on mouse hit testing.
 
 ## 4. View Store
 
@@ -133,9 +133,9 @@ Important view-store queries:
 - last drag point;
 - pinned element.
 
-`Command` values represent user intent: quit, open picker, select view, select
-child view, inspect, open connection picker, select connection, reload, help,
-legend, pan, zoom, reset, drag, and no-op.
+`Command` values represent user intent: quit, open picker, open link directory,
+select view, select child view, select link, inspect, reload, help, legend, pan,
+zoom, reset, drag, and no-op.
 
 `AppState::apply` returns an `UpdateResult`:
 
@@ -147,7 +147,7 @@ Effects isolate imperative work from pure state transitions. Examples:
 
 - open a view picker;
 - open a child-view picker;
-- open a connection picker;
+- open the link directory;
 - reload the workspace;
 - clear terminal image cache;
 - show help;
@@ -159,20 +159,21 @@ Effects isolate imperative work from pure state transitions. Examples:
 
 c4tui currently has three navigation surfaces:
 
+- primary `LinkDirectory` for immediately reachable diagrams;
 - global `ViewPicker` for direct view selection;
-- child/detail view picker when an element has multiple related child views;
-- `ConnectionPicker` for incoming/outgoing relationship traversal.
+- child/detail view picker when optional mouse drill hits an element with
+  multiple related child views.
 
 Direct global selection clears breadcrumbs. Linked traversal pushes the current
 view before navigating.
 
-### 6.2 Link Directory Target
+### 6.2 Link Directory
 
-The keyboard-first link directory should unify the "linked from here" behavior.
-Architecturally, it should be an app-owned component built over
-`tui_kit::widgets::grid`, similar to the existing view and connection pickers.
+The keyboard-first link directory unifies the "linked from here" behavior. It is
+an app-owned `NavPicker<LinkCandidate>` configuration, sharing the same modal
+lifecycle as the view and child/detail pickers.
 
-The link directory should consume a `Vec<LinkCandidate>` assembled from:
+The link directory consumes a `Vec<LinkCandidate>` assembled from:
 
 - detail links for elements visible in the current view;
 - connection links for the pinned/selected element, when present;
@@ -197,23 +198,23 @@ enum LinkKind {
 }
 ```
 
-Selecting a candidate should dispatch a command that preserves the linked
-navigation semantics:
+Selecting a candidate dispatches a command that preserves the linked navigation
+semantics:
 
 - push current view onto breadcrumbs;
 - set current view to the target;
 - optionally set pinned element;
 - clear drag state.
 
-The directory should not require SVG hit testing. It is derived from metadata
-and current app context.
+The directory does not require SVG hit testing. It is derived from metadata and
+current app context.
 
 ## 7. UI Components
 
 ### 7.1 View Picker
 
-`picker.rs` implements `ViewPicker`, a c4tui-specific component over
-`tui_kit::widgets::grid`. It supports:
+`nav_picker.rs` implements the shared `NavPicker<T>` substrate used by the view
+picker, child/detail picker, and link directory. It supports:
 
 - all-view browsing;
 - filtering;
@@ -221,11 +222,11 @@ and current app context.
 - per-view thumbnails;
 - limited subsets for child/detail drill choices.
 
-### 7.2 Connection Picker
+### 7.2 Link Directory and Connection Links
 
-`connection_picker.rs` implements relationship traversal over
-`tui_kit::widgets::grid`. Rows show direction, connected element, relationship
-metadata, and target view.
+`link_directory.rs` computes `LinkCandidate` values for detail links,
+relationship links, and legend links. Relationship rows show direction,
+connected element, relationship metadata, and target view.
 
 ### 7.3 Status Bar
 
@@ -243,10 +244,8 @@ terminal backend.
 `TerminalBackend` defines the imperative boundary:
 
 - canvas metrics;
-- key translation;
 - render active frame;
-- draw/close picker modals;
-- draw/close log view;
+- render/close active modal;
 - show help and error dialogs;
 - clear image cache;
 - teardown image viewports.
@@ -263,14 +262,13 @@ modal behavior without entering raw mode.
 
 1. Receive `tui_kit::events::AppEvent`.
 2. Route input by active focus scope.
-3. Convert low-level input to a `PendingCommand` through `keymap.rs`.
-4. Resolve canvas-dependent commands.
-5. Apply command to `AppState`.
-6. Perform any returned effect.
-7. Render or redraw the active modal.
+3. Convert low-level input to a `Command` through `keymap.rs`.
+4. Apply command to `AppState`.
+5. Perform any returned effect.
+6. Render or redraw the active modal.
 
-Focus scopes distinguish root diagram mode, picker modal, connection picker
-modal, log modal, and dialogs.
+Focus scopes distinguish root diagram mode, picker modal, link-directory modal,
+log modal, and dialogs.
 
 ## 10. Background Rendering and Watching
 
@@ -290,7 +288,7 @@ Tests avoid a real terminal. Coverage is organized around:
 - SVG bbox extraction, transforms, raster budget, and crop behavior;
 - `ViewStore` navigation candidate queries;
 - `AppState` command/effect transitions;
-- picker and connection picker rendering/keyboard behavior;
+- picker and link-directory rendering/keyboard behavior;
 - terminal backend call sequencing through `FakeTerminalBackend`;
 - status bar truncation and contextual hints.
 

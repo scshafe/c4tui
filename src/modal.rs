@@ -3,7 +3,8 @@
 //! `ActiveModal` is the single piece of `App` state that captures
 //! "we're showing something on top of the diagram canvas right now". It
 //! replaced three near-identical optional slot fields (picker,
-//! connection-picker, log) in Phase F Task 6.
+//! connection-picker, log) in Phase F Task 6; LinkDirectory now reuses the
+//! same navigation modal path.
 //!
 //! `Modal` is the rendering substrate: it covers everything a modal needs
 //! to paint into a buffer plus the image-pipeline hooks
@@ -175,8 +176,8 @@ impl<T: NavItem> Modal for NavPickerModal<T> {
         // Every picker variant wants the main diagram cleared. The
         // top-level / child-view spawn-sites also call
         // `terminal.teardown_image_viewport(...)` for the diagram before
-        // opening; re-clearing here is idempotent and keeps the
-        // connection-picker variant correct without a separate code path.
+        // opening; re-clearing here is idempotent and keeps link-directory
+        // rendering correct without a separate code path.
         vec![MAIN_PLACEMENT_ID]
     }
 

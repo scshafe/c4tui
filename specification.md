@@ -98,9 +98,9 @@ A view reachable from the current context. c4tui recognizes two link families:
 
 ### 5.3 Link Directory
 
-The target primary navigation surface for web-like traversal. It shows the
-numbered linked diagrams immediately reachable from the current view, highlights
-the current selection, and navigates with Enter.
+The primary navigation surface for web-like traversal. It shows linked diagrams
+immediately reachable from the current view, highlights the current selection,
+and navigates with Enter.
 
 ### 5.4 Breadcrumb
 
@@ -139,18 +139,18 @@ linked traversal.
 
 ### 6.4 Link Directory
 
-The link directory should:
+The link directory:
 
 - list only diagrams immediately reachable from the current context;
 - show stable numbers for visible entries;
 - highlight the currently selected entry;
 - support Up/Down or `j`/`k` selection movement;
-- support number-key selection where practical;
+- supports type-to-filter and stable selection movement;
 - navigate on Enter;
 - cancel on Esc without changing navigation state.
 
-Detail links should be available even without a selected element. Connection
-links require a selected/pinned element context.
+Detail and legend links are available even without a selected element.
+Connection links require a selected/pinned element context.
 
 ### 6.5 Optional Mouse Drill
 
@@ -160,16 +160,16 @@ exists. This is an optional convenience path, not the primary navigation model.
 
 ### 6.6 Relationship Traversal
 
-When an element context is selected, c4tui can show navigable incoming and
-outgoing relationships. Each relationship candidate includes:
+When an element context is selected, the link directory can show navigable
+incoming and outgoing relationships. Each relationship candidate includes:
 
 - direction;
 - connected element name;
 - relationship description and technology when present;
 - target view.
 
-Enter navigates to the selected target view and pins the connected element in
-that destination.
+Selecting a connection link navigates to the target view and pins the connected
+element in that destination.
 
 ### 6.7 Legend, Help, Log, Reload
 

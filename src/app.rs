@@ -4,10 +4,11 @@ use crate::config::AppConfig;
 use crate::event::Command;
 use crate::ids::ViewId;
 use crate::keymap::{KeyMap, KeyMapExt};
+use crate::link_directory::{collect_link_candidates, LinkCandidate};
 use crate::log_view::LogView;
 use crate::logger::SharedLogBuffer;
 use crate::modal::{ActiveModal, LogModalOutcome, NavModalOutcome, NavPickerModal};
-use crate::nav_items::{ConnectionNavItem, NavTarget, ViewNavItem};
+use crate::nav_items::{NavTarget, ViewNavItem};
 use crate::nav_picker::{
     NavPicker, NavPickerConfig, NavPickerMode, NavRenderArtifact, ThumbnailCellArea,
 };
@@ -31,7 +32,7 @@ use tui_kit::input::{InputEvent, KeyEvent};
 // decide which path handles input or a redraw.
 const SCOPE_ROOT: &str = "root";
 const SCOPE_PICKER: &str = "picker";
-const SCOPE_CONNECTION_PICKER: &str = "connection-picker";
+const SCOPE_LINK_DIRECTORY: &str = "link-directory";
 const SCOPE_DIALOG: &str = "dialog";
 const SCOPE_LOG: &str = "log";
 
@@ -262,7 +263,7 @@ impl App {
         match input {
             InputEvent::Key(key) => self.handle_key_event(key, terminal),
             InputEvent::Mouse(_) => {
-                // Modal scopes (picker, connection picker, log, dialog) absorb
+                // Modal scopes (picker, link directory, log, dialog) absorb
                 // mouse events without action — same behaviour as the pre-rename
                 // `_ => Continue` arms in each modal's key handler. Only the
                 // root scope routes mouse input to the root handler where the
@@ -283,9 +284,7 @@ impl App {
         terminal: &mut impl TerminalBackend,
     ) -> Result<()> {
         match self.active_scope() {
-            SCOPE_PICKER | SCOPE_CONNECTION_PICKER | SCOPE_LOG => {
-                self.handle_modal_key(key, terminal)
-            }
+            SCOPE_PICKER | SCOPE_LINK_DIRECTORY | SCOPE_LOG => self.handle_modal_key(key, terminal),
             SCOPE_DIALOG => {
                 if self
                     .dialog_slot
@@ -401,7 +400,7 @@ impl App {
     fn redraw_for_mode(&mut self, terminal: &mut impl TerminalBackend) -> Result<()> {
         let frame = self.frame_with_progress();
         match self.active_scope() {
-            SCOPE_PICKER | SCOPE_CONNECTION_PICKER | SCOPE_LOG => {
+            SCOPE_PICKER | SCOPE_LINK_DIRECTORY | SCOPE_LOG => {
                 if let Some(active) = self.active_modal.as_mut() {
                     terminal.render_modal(active.as_modal_mut(), &self.store)?;
                 }
@@ -584,55 +583,60 @@ impl App {
                         terminal.render_modal(active.as_modal_mut(), &self.store)?;
                     }
                 }
-                ModalSpec::Connection { source_element_id } => {
+                ModalSpec::Link => {
                     let current = self.state.current();
-                    let candidates = self
-                        .store
-                        .connection_candidates_for_element(current, &source_element_id);
-                    let source_element_name = self
-                        .store
-                        .model
-                        .elements
-                        .get(&source_element_id)
-                        .map(|e| e.name.clone())
-                        .unwrap_or_else(|| source_element_id.to_string());
+                    let pinned_element = self.state.pinned_element().cloned();
+                    let items =
+                        collect_link_candidates(&self.store, current, pinned_element.as_ref());
                     terminal.teardown_image_viewport(current)?;
-                    let items = ConnectionNavItem::collect_from_candidates(candidates, &self.store);
                     let picker_inner = NavPicker::new(
                         NavPickerConfig {
-                            id: ComponentId::new("c4tui-connection-picker"),
-                            title: " Connection Picker ".into(),
-                            footer_hint: " Enter → navigate | Esc → cancel ".into(),
-                            default_header: format!(
-                                "Connections for {}  -  Enter to navigate, Esc to cancel",
-                                source_element_name
-                            ),
+                            id: ComponentId::new("c4tui-link-directory"),
+                            title: " Link Directory ".into(),
+                            footer_hint: " type → filter | Enter → navigate | Esc → cancel ".into(),
+                            default_header:
+                                "Linked diagrams from here  -  Enter to navigate, Esc to cancel"
+                                    .into(),
                             min_cell_cols: 34,
                             cell_rows: 5,
-                            mode: NavPickerMode::Flat,
+                            mode: NavPickerMode::Filterable {
+                                allows_secondary_toggle: false,
+                                secondary_label: "",
+                            },
                         },
                         items,
                         0,
                     );
+                    let initial_hover = picker_inner
+                        .selected()
+                        .map(|item| item.target_view)
+                        .unwrap_or(current);
+                    if initial_hover != current && !self.store.has_rendered(initial_hover) {
+                        let path = self.store.view(initial_hover).svg_path.clone();
+                        self.scheduler.request(
+                            initial_hover,
+                            RenderPriority::Hover,
+                            path,
+                            self.store.budget(),
+                        );
+                    }
                     self.focus
                         .push_scope(
-                            SCOPE_CONNECTION_PICKER,
+                            SCOPE_LINK_DIRECTORY,
                             FocusScopeKind::Modal,
-                            vec![FocusNode::new("connection-picker-list")],
+                            vec![FocusNode::new("link-directory-list")],
                         )
-                        .expect("connection picker scope is well-formed");
-                    let modal: NavPickerModal<ConnectionNavItem> = NavPickerModal {
+                        .expect("link directory scope is well-formed");
+                    let modal: NavPickerModal<LinkCandidate> = NavPickerModal {
                         picker: Cached::new(picker_inner),
-                        into_target: Box::new(NavTarget::Connection),
-                        hovered_view: Box::new(|_| None),
+                        into_target: Box::new(NavTarget::Link),
+                        hovered_view: Box::new(|p| p.selected().map(|i| i.target_view)),
                         thumbnails: Box::new(|_| Vec::new()),
                     };
                     self.active_modal = Some(ActiveModal::Nav {
                         modal: Box::new(modal),
                         on_select: Box::new(|target, _state| match target {
-                            NavTarget::Connection(candidate) => {
-                                Some(Command::SelectConnection(candidate))
-                            }
+                            NavTarget::Link(candidate) => Some(Command::SelectLink(candidate)),
                             _ => None,
                         }),
                     });
@@ -1122,10 +1126,10 @@ mod tests {
     }
 
     #[test]
-    fn connection_picker_selects_connection_by_keystrokes() {
+    fn link_directory_selects_detail_link_without_pinned_element() {
         let dir = tempfile::tempdir().unwrap();
         let (tx, _rx) = mpsc::channel();
-        let mut app = test_app_with_connection_svgs(dir.path(), tx);
+        let mut app = test_app_with_related_view_svgs(dir.path(), tx);
         let mut terminal = FakeTerminalBackend::new();
 
         run_with_keys(
@@ -1135,10 +1139,8 @@ mod tests {
         );
 
         assert_eq!(app.state.current(), ViewId::new(1));
-        assert_eq!(
-            app.state.render_frame().pinned_element,
-            Some(ElementId::new("database"))
-        );
+        assert_eq!(app.state.render_frame().breadcrumbs, &[ViewId::first()]);
+        assert_eq!(app.state.render_frame().pinned_element, None);
         assert_eq!(
             terminal.calls,
             vec![
@@ -1152,7 +1154,43 @@ mod tests {
     }
 
     #[test]
-    fn connection_picker_cancel_returns_to_current_view() {
+    fn link_directory_selects_connection_for_pinned_element_by_keystrokes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, _rx) = mpsc::channel();
+        let mut app = test_app_with_connection_svgs(dir.path(), tx);
+        let mut terminal = FakeTerminalBackend::new();
+
+        run_with_keys(
+            &mut app,
+            &mut terminal,
+            &[
+                KeyEvent::Char('i'),
+                KeyEvent::Enter,
+                KeyEvent::Enter,
+                KeyEvent::Char('q'),
+            ],
+        );
+
+        assert_eq!(app.state.current(), ViewId::new(1));
+        assert_eq!(
+            app.state.render_frame().pinned_element,
+            Some(ElementId::new("database"))
+        );
+        assert_eq!(
+            terminal.calls,
+            vec![
+                FakeTerminalCall::Render(ViewId::first()),
+                FakeTerminalCall::Render(ViewId::first()),
+                FakeTerminalCall::TeardownImageViewport(ViewId::first()),
+                FakeTerminalCall::RenderModal,
+                FakeTerminalCall::CloseModal,
+                FakeTerminalCall::Render(ViewId::new(1)),
+            ]
+        );
+    }
+
+    #[test]
+    fn link_directory_cancel_returns_to_current_view() {
         let dir = tempfile::tempdir().unwrap();
         let (tx, _rx) = mpsc::channel();
         let mut app = test_app_with_connection_svgs(dir.path(), tx);
@@ -1179,7 +1217,7 @@ mod tests {
     }
 
     #[test]
-    fn connection_picker_opens_empty_without_pinning_source() {
+    fn link_directory_opens_empty_without_pinning_source() {
         let dir = tempfile::tempdir().unwrap();
         let (tx, _rx) = mpsc::channel();
         let mut app = test_app_with_connection_svgs(dir.path(), tx);

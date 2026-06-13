@@ -59,7 +59,7 @@ impl KeyMapExt for KeyMap {
         map.bind(KeyTrigger::Char('Z'), Command::CycleZoomStep);
         map.bind(
             KeyTrigger::Special(SpecialKey::Enter),
-            Command::OpenConnectionPicker,
+            Command::OpenLinkDirectory,
         );
         map.bind(
             KeyTrigger::Char('i'),
@@ -200,12 +200,12 @@ mod tests {
     }
 
     #[test]
-    fn enter_opens_connection_picker() {
+    fn enter_opens_link_directory() {
         let map = defaults();
 
         assert!(matches!(
             map.lookup(KeyEvent::Enter),
-            Some(Command::OpenConnectionPicker)
+            Some(Command::OpenLinkDirectory)
         ));
     }
 

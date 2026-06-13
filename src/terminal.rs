@@ -258,7 +258,7 @@ impl TerminalSession {
 
     pub fn help_text(keys: &KeyBindings) -> String {
         format!(
-            "Keys\n\n  {quit}  Quit\n  Esc  Clear pinned element / quit if none\n  {open}  Open view picker (type to filter, Tab toggles legends)\n  {reload}  Reload workspace/export\n  K  Jump to legend for current view\n  i  Inspect element at viewport center\n  Enter  Open connection picker for pinned/center element\n  Backspace  Go back through breadcrumbs\n  Arrows or hjkl  Pan\n  {zoom_in}/=  Zoom in\n  {zoom_out}/_  Zoom out\n  {reset} or {fit}  Reset/fit view\n  Mouse wheel  Zoom around cursor\n  Mouse drag  Pan\n  Click element  Drill into child view, else pin\n\nConfig: ~/.config/c4tui/config.toml\nLogging: --log-file <path>, level via RUST_LOG",
+            "Keys\n\n  {quit}  Quit\n  Esc  Clear pinned element / quit if none\n  {open}  Open view picker (type to filter, Tab toggles legends)\n  {reload}  Reload workspace/export\n  K  Jump to legend for current view\n  i  Inspect element at viewport center\n  Enter  Open link directory\n  Backspace  Go back through breadcrumbs\n  Arrows or hjkl  Pan\n  {zoom_in}/=  Zoom in\n  {zoom_out}/_  Zoom out\n  {reset} or {fit}  Reset/fit view\n  Mouse wheel  Zoom around cursor\n  Mouse drag  Pan\n  Click element  Drill into child view, else pin\n\nConfig: ~/.config/c4tui/config.toml\nLogging: --log-file <path>, level via RUST_LOG",
             quit = keys.quit,
             open = keys.open_picker,
             reload = keys.reload,

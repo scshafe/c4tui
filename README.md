@@ -4,7 +4,7 @@ Interactive terminal viewer for Structurizr C4 diagrams. It renders workspace vi
 
 ## Status
 
-Pre-alpha moving toward v1. Phases 0-6 are implemented, and the architecture hardening pass is complete: the binary detects terminal capabilities, exports/rasterizes Structurizr SVG views, displays them with Kitty graphics, provides a keyboard view picker with per-view image caching, supports pan/zoom via Kitty source rectangles, optional mouse drill, relationship traversal through a connection picker, reload, help, config, and file logging. The next navigation direction is a keyboard-first link directory for immediately reachable diagrams. See [implementation-plan.md](./implementation-plan.md) for the phased roadmap.
+Pre-alpha moving toward v1. Phases 0-6 are implemented, and the architecture hardening pass is complete: the binary detects terminal capabilities, exports/rasterizes Structurizr SVG views, displays them with Kitty graphics, provides a keyboard view picker with per-view image caching, supports pan/zoom via Kitty source rectangles, keyboard-first link traversal, optional mouse drill, reload, help, config, and file logging. See [implementation-plan.md](./implementation-plan.md) for the phased roadmap.
 
 ## Install
 
@@ -36,7 +36,7 @@ GitHub Releases include prebuilt archives for macOS arm64, macOS amd64, Linux am
 cargo run -- --workspace ./workspace.dsl
 ```
 
-With `--workspace`, c4tui exports the workspace to SVG with the `structurizr` CLI (resolved from `PATH`), renders the first exported view inline, opens a view picker with `o`, switches views with Up/Down + Enter, pans with arrow keys or mouse drag, zooms with `+`/`-` or the mouse wheel, resets fit with `0`/`f`, optionally drills into related child views by clicking diagram elements, opens relationship links with Enter when an element is pinned/selected, goes back with Backspace, reloads the workspace with `r`, shows help with `?`, opens the in-app log viewer with `L`, and exits with `q`. Without `--workspace`, it only probes terminal capabilities and exits. It returns non-zero when Kitty graphics support is unavailable, because inline image rendering requires it.
+With `--workspace`, c4tui exports the workspace to SVG with the `structurizr` CLI (resolved from `PATH`), renders the first exported view inline, opens a view picker with `o`, switches views with Up/Down + Enter, opens the link directory with Enter, pans with arrow keys or mouse drag, zooms with `+`/`-` or the mouse wheel, resets fit with `0`/`f`, optionally drills into related child views by clicking diagram elements, goes back with Backspace, reloads the workspace with `r`, shows help with `?`, opens the in-app log viewer with `L`, and exits with `q`. Without `--workspace`, it only probes terminal capabilities and exits. It returns non-zero when Kitty graphics support is unavailable, because inline image rendering requires it.
 
 Useful flags:
 

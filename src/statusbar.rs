@@ -184,16 +184,10 @@ pub mod segments {
         }
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
             let keys = &ctx.config.keys;
-            let enter_hint = ctx
-                .pinned_element_connections
-                .filter(|connections| connections.total() > 0)
-                .map(|_| "  Enter links")
-                .unwrap_or("");
             Some(
                 StatusFragment::new(format!(
-                    "{}/hjkl pan  +/- zoom{}  {} reset  {} pick  {} reload  ? help  {} quit",
+                    "{}/hjkl pan  +/- zoom  Enter links  {} reset  {} pick  {} reload  ? help  {} quit",
                     arrows_glyph(),
-                    enter_hint,
                     keys.reset,
                     keys.open_picker,
                     keys.reload,
@@ -508,14 +502,14 @@ mod tests {
     }
 
     #[test]
-    fn hints_segment_only_advertises_enter_for_navigable_pinned_connections() {
+    fn hints_segment_advertises_enter_for_link_directory() {
         let rendered = rendered();
         let view = view();
         let config = AppConfig::default();
         let mut ctx = ctx(&rendered, &view, &config);
 
         let fragment = HintsSegment.render(&ctx).unwrap();
-        assert!(!fragment.text.contains("Enter links"));
+        assert!(fragment.text.contains("Enter links"));
 
         ctx.pinned_element_connections = Some(ConnectionCounts {
             outgoing: 1,

@@ -7,6 +7,7 @@ mod config;
 mod event;
 mod ids;
 mod keymap;
+mod link_directory;
 mod log_view;
 mod logger;
 mod modal;
