@@ -1,20 +1,20 @@
 use crate::backend::TerminalBackend;
 use crate::clipboard::Clipboard;
 use crate::config::AppConfig;
+use crate::effect_runner::{
+    active_scope, enter_dialog, return_to_root, DialogSlot, EffectRunner, SCOPE_DIALOG, SCOPE_LOG,
+    SCOPE_ROOT,
+};
 use crate::event::Command;
 use crate::ids::ViewId;
 use crate::keymap::{KeyMap, KeyMapExt};
-use crate::link_directory::{collect_link_candidates, LinkCandidate};
-use crate::log_view::LogView;
 use crate::logger::SharedLogBuffer;
-use crate::modal::{ActiveModal, LogModalOutcome, NavModalOutcome, NavPickerModal};
-use crate::nav_items::{NavTarget, ViewNavItem};
-use crate::nav_picker::{
-    NavPicker, NavPickerConfig, NavPickerMode, NavRenderArtifact, ThumbnailCellArea,
-};
+use crate::modal::{ActiveModal, LogModalOutcome, NavModalOutcome};
+use crate::modal_factory::{SCOPE_LINK_DIRECTORY, SCOPE_PICKER};
+use crate::nav_items::NavTarget;
 use crate::render_cache::RenderCache;
 use crate::render_pool::{RenderPriority, RenderScheduler};
-use crate::state::{AppState, Effect, ModalSpec};
+use crate::state::{AppState, Effect};
 use crate::view_catalog::ViewCatalog;
 use crate::viewport_state::{diagram_placement_policy, ViewportState};
 use crate::workspace::{discover_views, export_workspace, load_workspace_model, WorkspaceSource};
@@ -22,26 +22,11 @@ use anyhow::Result;
 use log::{error, info};
 use std::collections::VecDeque;
 use std::sync::mpsc::TryRecvError;
-use tui_kit::component::{Cached, ComponentId};
 use tui_kit::events::{
     AppEvent, AppEventReceiver, AppEventSender, SchedulerEvent, TerminalEvent, WatcherEvent,
 };
-use tui_kit::focus::{FocusConfig, FocusId, FocusManager, FocusNode, FocusScopeKind};
+use tui_kit::focus::{FocusConfig, FocusManager, FocusNode};
 use tui_kit::input::{InputEvent, KeyEvent};
-
-// Modal scope identifiers. c4tui's modes (picker, dialog, log viewer) push
-// focus scopes with these IDs; routing reads `focus.active_scope_id()` to
-// decide which path handles input or a redraw.
-const SCOPE_ROOT: &str = "root";
-const SCOPE_PICKER: &str = "picker";
-const SCOPE_LINK_DIRECTORY: &str = "link-directory";
-const SCOPE_DIALOG: &str = "dialog";
-const SCOPE_LOG: &str = "log";
-
-#[derive(Debug)]
-struct DialogSlot {
-    dismissable: bool,
-}
 
 pub struct App {
     catalog: ViewCatalog,
@@ -114,19 +99,16 @@ impl App {
     }
 
     fn active_scope(&self) -> &str {
-        self.focus
-            .active_scope_id()
-            .map(FocusId::as_str)
-            .unwrap_or(SCOPE_ROOT)
+        active_scope(&self.focus)
     }
 
     /// Pop any active modal scope and clear its slot data. No-op at root.
     fn return_to_root(&mut self) {
-        while self.focus.active_scope_id().map(FocusId::as_str) != Some(SCOPE_ROOT) {
-            self.focus.pop_scope();
-        }
-        self.active_modal = None;
-        self.dialog_slot = None;
+        return_to_root(
+            &mut self.focus,
+            &mut self.active_modal,
+            &mut self.dialog_slot,
+        );
     }
 
     /// Recompute the placement policy from the current config and clear any
@@ -136,36 +118,14 @@ impl App {
         self.viewport.set_placement_policy(policy);
     }
 
-    /// Toggle the log viewer scope. Closes if already open; opens otherwise.
-    fn toggle_log_view(&mut self) {
-        if matches!(self.active_modal, Some(ActiveModal::Log { .. })) {
-            self.return_to_root();
-            return;
-        }
-        self.return_to_root();
-        self.focus
-            .push_scope(
-                SCOPE_LOG,
-                FocusScopeKind::Modal,
-                vec![FocusNode::new("log-pane")],
-            )
-            .expect("log scope is well-formed");
-        self.active_modal = Some(ActiveModal::Log {
-            modal: Box::new(LogView::new(self.log_buffer.clone())),
-        });
-    }
-
     /// Enter a dismissable dialog scope, replacing any current modal.
     fn enter_dialog(&mut self, dismissable: bool) {
-        self.return_to_root();
-        self.focus
-            .push_scope(
-                SCOPE_DIALOG,
-                FocusScopeKind::Modal,
-                vec![FocusNode::new("dialog-ok")],
-            )
-            .expect("dialog scope is well-formed");
-        self.dialog_slot = Some(DialogSlot { dismissable });
+        enter_dialog(
+            &mut self.focus,
+            &mut self.active_modal,
+            &mut self.dialog_slot,
+            dismissable,
+        );
     }
 
     #[allow(dead_code)]
@@ -523,283 +483,25 @@ impl App {
             &mut self.viewport,
             canvas,
         )?;
-        self.request_active_render();
 
-        match update.effect {
-            Some(Effect::Quit) => {
-                self.quit = true;
-            }
-            Some(Effect::OpenModal(spec)) => match spec {
-                ModalSpec::View => {
-                    let current = self.state.current();
-                    terminal.teardown_image_viewport(current)?;
-                    let items = ViewNavItem::collect_all(&self.catalog.views, &self.catalog.model);
-                    let initial = items
-                        .iter()
-                        .position(|item| item.view_id == current)
-                        .unwrap_or(0);
-                    let picker_inner = NavPicker::new(
-                        NavPickerConfig {
-                            id: ComponentId::new("c4tui-view-picker"),
-                            title: " View Picker ".into(),
-                            footer_hint:
-                                " type → filter | Tab → legends | Enter → select | Esc → cancel "
-                                    .into(),
-                            default_header: "Pick a view  —  type to filter, Enter to select, Esc to cancel, Tab to toggle key views".into(),
-                            min_cell_cols: 22,
-                            cell_rows: 8,
-                            mode: NavPickerMode::Filterable {
-                                allows_secondary_toggle: true,
-                                secondary_label: "legends",
-                            },
-                        },
-                        items,
-                        initial,
-                    );
-                    let initial_hover = picker_inner
-                        .selected()
-                        .map(|item| item.view_id)
-                        .unwrap_or(current);
-                    if !self.render_cache.has_rendered(initial_hover) {
-                        let path = self.catalog.view(initial_hover).svg_path.clone();
-                        self.scheduler.request(
-                            initial_hover,
-                            RenderPriority::Hover,
-                            path,
-                            self.render_cache.budget(),
-                        );
-                    }
-                    self.focus
-                        .push_scope(
-                            SCOPE_PICKER,
-                            FocusScopeKind::Modal,
-                            vec![FocusNode::new("picker-list")],
-                        )
-                        .expect("picker scope is well-formed");
-                    let modal = NavPickerModal {
-                        picker: Cached::new(picker_inner),
-                        into_target: Box::new(NavTarget::View),
-                        hovered_view: Box::new(|p| p.selected().map(|i| i.view_id)),
-                        thumbnails: Box::new(thumbnails_from_view_picker),
-                    };
-                    self.active_modal = Some(ActiveModal::Nav {
-                        modal: Box::new(modal),
-                        on_select: Box::new(|target, _state| match target {
-                            NavTarget::View(view_id) => Some(Command::SelectView(view_id)),
-                            _ => None,
-                        }),
-                    });
-                    if let Some(active) = self.active_modal.as_mut() {
-                        terminal.render_modal(
-                            active.as_modal_mut(),
-                            &self.catalog,
-                            &self.render_cache,
-                        )?;
-                    }
-                }
-                ModalSpec::ChildView { target_view_ids } => {
-                    let current = self.state.current();
-                    terminal.teardown_image_viewport(current)?;
-                    let items = ViewNavItem::collect_for_view_ids(
-                        &self.catalog.views,
-                        &self.catalog.model,
-                        &target_view_ids,
-                    );
-                    let initial_view = target_view_ids.first().copied().unwrap_or(current);
-                    let initial = items
-                        .iter()
-                        .position(|item| item.view_id == initial_view)
-                        .unwrap_or(0);
-                    let picker_inner = NavPicker::new(
-                        NavPickerConfig {
-                            id: ComponentId::new("c4tui-child-view-picker"),
-                            title: " Related Views ".into(),
-                            footer_hint: " type → filter | Enter → drill | Esc → cancel ".into(),
-                            default_header: "Pick a child view to drill into".into(),
-                            min_cell_cols: 22,
-                            cell_rows: 8,
-                            mode: NavPickerMode::Filterable {
-                                allows_secondary_toggle: false,
-                                secondary_label: "",
-                            },
-                        },
-                        items,
-                        initial,
-                    );
-                    let initial_hover = picker_inner
-                        .selected()
-                        .map(|item| item.view_id)
-                        .unwrap_or(initial_view);
-                    if !self.render_cache.has_rendered(initial_hover) {
-                        let path = self.catalog.view(initial_hover).svg_path.clone();
-                        self.scheduler.request(
-                            initial_hover,
-                            RenderPriority::Hover,
-                            path,
-                            self.render_cache.budget(),
-                        );
-                    }
-                    self.focus
-                        .push_scope(
-                            SCOPE_PICKER,
-                            FocusScopeKind::Modal,
-                            vec![FocusNode::new("picker-list")],
-                        )
-                        .expect("picker scope is well-formed");
-                    let modal = NavPickerModal {
-                        picker: Cached::new(picker_inner),
-                        into_target: Box::new(NavTarget::ChildView),
-                        hovered_view: Box::new(|p| p.selected().map(|i| i.view_id)),
-                        thumbnails: Box::new(thumbnails_from_view_picker),
-                    };
-                    self.active_modal = Some(ActiveModal::Nav {
-                        modal: Box::new(modal),
-                        on_select: Box::new(|target, _state| match target {
-                            NavTarget::ChildView(view_id) => {
-                                Some(Command::SelectChildView(view_id))
-                            }
-                            _ => None,
-                        }),
-                    });
-                    if let Some(active) = self.active_modal.as_mut() {
-                        terminal.render_modal(
-                            active.as_modal_mut(),
-                            &self.catalog,
-                            &self.render_cache,
-                        )?;
-                    }
-                }
-                ModalSpec::Link => {
-                    let current = self.state.current();
-                    let pinned_element = self.state.pinned_element().cloned();
-                    let items =
-                        collect_link_candidates(&self.catalog, current, pinned_element.as_ref());
-                    terminal.teardown_image_viewport(current)?;
-                    let picker_inner = NavPicker::new(
-                        NavPickerConfig {
-                            id: ComponentId::new("c4tui-link-directory"),
-                            title: " Link Directory ".into(),
-                            footer_hint: " type → filter | Enter → navigate | Esc → cancel ".into(),
-                            default_header:
-                                "Linked diagrams from here  -  Enter to navigate, Esc to cancel"
-                                    .into(),
-                            min_cell_cols: 34,
-                            cell_rows: 5,
-                            mode: NavPickerMode::Filterable {
-                                allows_secondary_toggle: false,
-                                secondary_label: "",
-                            },
-                        },
-                        items,
-                        0,
-                    );
-                    let initial_hover = picker_inner
-                        .selected()
-                        .map(|item| item.target_view)
-                        .unwrap_or(current);
-                    if initial_hover != current && !self.render_cache.has_rendered(initial_hover) {
-                        let path = self.catalog.view(initial_hover).svg_path.clone();
-                        self.scheduler.request(
-                            initial_hover,
-                            RenderPriority::Hover,
-                            path,
-                            self.render_cache.budget(),
-                        );
-                    }
-                    self.focus
-                        .push_scope(
-                            SCOPE_LINK_DIRECTORY,
-                            FocusScopeKind::Modal,
-                            vec![FocusNode::new("link-directory-list")],
-                        )
-                        .expect("link directory scope is well-formed");
-                    let modal: NavPickerModal<LinkCandidate> = NavPickerModal {
-                        picker: Cached::new(picker_inner),
-                        into_target: Box::new(NavTarget::Link),
-                        hovered_view: Box::new(|p| p.selected().map(|i| i.target_view)),
-                        thumbnails: Box::new(|_| Vec::new()),
-                    };
-                    self.active_modal = Some(ActiveModal::Nav {
-                        modal: Box::new(modal),
-                        on_select: Box::new(|target, _state| match target {
-                            NavTarget::Link(candidate) => Some(Command::SelectLink(candidate)),
-                            _ => None,
-                        }),
-                    });
-                    if let Some(active) = self.active_modal.as_mut() {
-                        terminal.render_modal(
-                            active.as_modal_mut(),
-                            &self.catalog,
-                            &self.render_cache,
-                        )?;
-                    }
-                }
-            },
-            Some(Effect::ReloadWorkspace) => {
-                terminal
-                    .show_message("Reloading workspace...", "Re-running Structurizr export.")?;
-                match self.reload_store() {
-                    Ok(()) => {
-                        let update = self.state.apply(
-                            Command::ReloadSucceeded,
-                            &self.catalog,
-                            &mut self.render_cache,
-                            &mut self.viewport,
-                            canvas,
-                        )?;
-                        if update.effect == Some(Effect::ClearImageCache) {
-                            terminal.clear_image_cache()?;
-                        }
-                    }
-                    Err(error) => {
-                        error!("reload failed: {error:#}");
-                        self.state.apply(
-                            Command::ReloadFailed,
-                            &self.catalog,
-                            &mut self.render_cache,
-                            &mut self.viewport,
-                            canvas,
-                        )?;
-                        terminal.show_error("Reload failed", &format!("{error:#}"))?;
-                        self.enter_dialog(true);
-                        return Ok(());
-                    }
-                }
-                terminal.render(
-                    &self.frame_with_progress(),
-                    &self.catalog,
-                    &mut self.render_cache,
-                    &mut self.viewport,
-                )?;
-            }
-            Some(Effect::ClearImageCache) => {
-                terminal.clear_image_cache()?;
-                terminal.render(
-                    &self.frame_with_progress(),
-                    &self.catalog,
-                    &mut self.render_cache,
-                    &mut self.viewport,
-                )?;
-            }
-            Some(Effect::ToggleLogView) => {
-                self.toggle_log_view();
-                self.redraw_for_mode(terminal)?;
-            }
-            Some(Effect::ShowHelp) => {
-                terminal.show_help(&self.config.keys)?;
-                self.enter_dialog(true);
-            }
-            None if update.render => {
-                terminal.render(
-                    &self.frame_with_progress(),
-                    &self.catalog,
-                    &mut self.render_cache,
-                    &mut self.viewport,
-                )?;
-            }
-            None => {}
-        }
-        Ok(())
+        let log_buffer = self.log_buffer.clone();
+        let mut runner = EffectRunner {
+            terminal,
+            catalog: &mut self.catalog,
+            render_cache: &mut self.render_cache,
+            viewport: &mut self.viewport,
+            state: &mut self.state,
+            scheduler: &mut self.scheduler,
+            focus: &mut self.focus,
+            active_modal: &mut self.active_modal,
+            dialog_slot: &mut self.dialog_slot,
+            config: &self.config,
+            workspace: &self.workspace,
+            svg_format: &self.svg_format,
+            log_buffer,
+            quit: &mut self.quit,
+        };
+        runner.handle_update(update)
     }
 
     fn frame_with_progress(&self) -> crate::state::RenderFrame {
@@ -842,22 +544,6 @@ impl App {
             .request_all(render_jobs, RenderPriority::Background, render_budget);
         Ok(())
     }
-}
-
-/// Convert a `ViewNavItem` picker's per-frame artifacts into the thumbnail
-/// anchors the terminal layer paints after rendering. Same shape as the
-/// pre-Task-6 inline loop in `TerminalSession::draw_picker`.
-fn thumbnails_from_view_picker(picker: &NavPicker<ViewNavItem>) -> Vec<ThumbnailCellArea> {
-    picker
-        .last_artifacts()
-        .iter()
-        .map(|artifact| match artifact {
-            NavRenderArtifact::Thumbnail { id, area } => ThumbnailCellArea {
-                view_id: id.view_id(),
-                area: *area,
-            },
-        })
-        .collect()
 }
 
 fn coalesce_resize_events(
