@@ -1,7 +1,4 @@
-#![allow(dead_code)]
-
 use crate::config::AppConfig;
-use crate::ids::ViewId;
 use crate::render::RenderedView;
 use crate::workspace::{ConnectionCounts, ElementMetadata, ViewInfo};
 use tui_kit::layout::{CanvasMetrics, Placement, ViewTransform};
@@ -15,7 +12,6 @@ pub use tui_kit::bar::{SegmentSlot, StatusFragment};
 
 pub struct StatusContext<'a> {
     pub view: &'a ViewInfo,
-    pub view_id: ViewId,
     pub breadcrumb_names: Vec<&'a str>,
     pub transform: ViewTransform,
     pub placement: Placement,
@@ -29,7 +25,6 @@ pub struct StatusContext<'a> {
 }
 
 pub trait StatusSegment: std::fmt::Debug {
-    fn id(&self) -> &'static str;
     fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment>;
 }
 
@@ -64,8 +59,6 @@ impl StatusBar {
 #[derive(Default)]
 pub struct StatusBarBuilder {
     segments: Vec<(SegmentSlot, Box<dyn StatusSegment + Send + Sync>)>,
-    separator: Option<&'static str>,
-    elide: Option<&'static str>,
 }
 
 impl StatusBarBuilder {
@@ -78,21 +71,11 @@ impl StatusBarBuilder {
         self
     }
 
-    pub fn separator(mut self, sep: &'static str) -> Self {
-        self.separator = Some(sep);
-        self
-    }
-
-    pub fn elide(mut self, elide: &'static str) -> Self {
-        self.elide = Some(elide);
-        self
-    }
-
     pub fn build(self) -> StatusBar {
         StatusBar {
             segments: self.segments,
-            separator: self.separator.unwrap_or(" | "),
-            elide: self.elide.unwrap_or("…"),
+            separator: " | ",
+            elide: "…",
         }
     }
 }
@@ -104,9 +87,6 @@ pub mod segments {
     pub struct AppNameSegment;
 
     impl StatusSegment for AppNameSegment {
-        fn id(&self) -> &'static str {
-            "app_name"
-        }
         fn render(&self, _ctx: &StatusContext<'_>) -> Option<StatusFragment> {
             Some(
                 StatusFragment::new(format!(
@@ -123,9 +103,6 @@ pub mod segments {
     pub struct BreadcrumbSegment;
 
     impl StatusSegment for BreadcrumbSegment {
-        fn id(&self) -> &'static str {
-            "breadcrumb"
-        }
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
             let mut parts = ctx.breadcrumb_names.clone();
             parts.push(ctx.view.name.as_str());
@@ -137,9 +114,6 @@ pub mod segments {
     pub struct DescriptionSegment;
 
     impl StatusSegment for DescriptionSegment {
-        fn id(&self) -> &'static str {
-            "description"
-        }
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
             ctx.view
                 .description
@@ -152,9 +126,6 @@ pub mod segments {
     pub struct ViewTypeSegment;
 
     impl StatusSegment for ViewTypeSegment {
-        fn id(&self) -> &'static str {
-            "view_type"
-        }
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
             Some(StatusFragment::new(ctx.view.kind.label().to_owned()).with_priority(120))
         }
@@ -164,9 +135,6 @@ pub mod segments {
     pub struct ZoomSegment;
 
     impl StatusSegment for ZoomSegment {
-        fn id(&self) -> &'static str {
-            "zoom"
-        }
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
             Some(
                 StatusFragment::new(format!("zoom {:>3.0}%", ctx.transform.scale * 100.0))
@@ -179,9 +147,6 @@ pub mod segments {
     pub struct HintsSegment;
 
     impl StatusSegment for HintsSegment {
-        fn id(&self) -> &'static str {
-            "hints"
-        }
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
             let keys = &ctx.config.keys;
             Some(
@@ -206,9 +171,6 @@ pub mod segments {
     pub struct WorkspacePathSegment;
 
     impl StatusSegment for WorkspacePathSegment {
-        fn id(&self) -> &'static str {
-            "workspace_path"
-        }
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
             let path = ctx.workspace_path?;
             let display = path
@@ -224,9 +186,6 @@ pub mod segments {
     pub struct ImageDimensionsSegment;
 
     impl StatusSegment for ImageDimensionsSegment {
-        fn id(&self) -> &'static str {
-            "image_dim"
-        }
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
             let raster = ctx.rendered.raster_size;
             let natural = ctx.rendered.natural_size;
@@ -244,9 +203,6 @@ pub mod segments {
     pub struct ViewportSegment;
 
     impl StatusSegment for ViewportSegment {
-        fn id(&self) -> &'static str {
-            "viewport"
-        }
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
             let canvas_pixels = ctx.canvas.pixels();
             Some(
@@ -266,9 +222,6 @@ pub mod segments {
     pub struct SourceRectSegment;
 
     impl StatusSegment for SourceRectSegment {
-        fn id(&self) -> &'static str {
-            "source_rect"
-        }
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
             let s = ctx.placement.source;
             Some(
@@ -282,9 +235,6 @@ pub mod segments {
     pub struct RenderProgressSegment;
 
     impl StatusSegment for RenderProgressSegment {
-        fn id(&self) -> &'static str {
-            "render_progress"
-        }
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
             let (completed, total) = ctx.render_progress?;
             if completed >= total {
@@ -298,9 +248,6 @@ pub mod segments {
     pub struct PinnedElementSegment;
 
     impl StatusSegment for PinnedElementSegment {
-        fn id(&self) -> &'static str {
-            "pinned_element"
-        }
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
             let pinned = ctx.pinned_element?;
             let mut text = format!("→ {} [{}]", pinned.name, pinned.kind.label());
@@ -330,9 +277,6 @@ pub mod segments {
     pub struct PlacementSegment;
 
     impl StatusSegment for PlacementSegment {
-        fn id(&self) -> &'static str {
-            "placement"
-        }
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
             Some(
                 StatusFragment::new(format!(
@@ -350,9 +294,6 @@ pub mod segments {
     pub struct CenterSegment;
 
     impl StatusSegment for CenterSegment {
-        fn id(&self) -> &'static str {
-            "center"
-        }
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
             Some(
                 StatusFragment::new(format!(
@@ -431,7 +372,6 @@ mod tests {
         let placement = ViewTransform::fit().place(rendered.raster_size, canvas);
         StatusContext {
             view,
-            view_id: ViewId::first(),
             breadcrumb_names: Vec::new(),
             transform: ViewTransform::fit(),
             placement,
@@ -485,9 +425,6 @@ mod tests {
         #[derive(Debug)]
         struct Marker;
         impl StatusSegment for Marker {
-            fn id(&self) -> &'static str {
-                "marker"
-            }
             fn render(&self, _ctx: &StatusContext<'_>) -> Option<StatusFragment> {
                 Some(StatusFragment::new("MARKER").with_priority(255))
             }

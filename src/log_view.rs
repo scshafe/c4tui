@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! State and key handling for the in-app log viewer pane.
 //!
 //! The viewer is a modal scope (`SCOPE_LOG`) the user pushes with `L` from
@@ -51,10 +49,6 @@ impl LogView {
             last_status: None,
             last_seen_total: 0,
         }
-    }
-
-    pub fn buffer(&self) -> &SharedLogBuffer {
-        &self.buffer
     }
 
     pub fn last_status(&self) -> Option<&str> {
@@ -216,7 +210,6 @@ pub struct LogSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clipboard::{ClipboardCapabilities, ClipboardSupport, ImagePayload};
     use crate::logger::LogBuffer;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
@@ -227,19 +220,10 @@ mod tests {
         last_text: Mutex<Option<String>>,
     }
     impl Clipboard for RecordingClipboard {
-        fn capabilities(&self) -> ClipboardCapabilities {
-            ClipboardCapabilities {
-                text: ClipboardSupport::Native,
-                image: ClipboardSupport::Unsupported,
-            }
-        }
         fn copy_text(&self, text: &str) -> Result<CopyOutcome> {
             self.copies.fetch_add(1, Ordering::SeqCst);
             *self.last_text.lock().unwrap() = Some(text.to_owned());
             Ok(CopyOutcome::Native)
-        }
-        fn copy_image(&self, _image: &ImagePayload) -> Result<CopyOutcome> {
-            anyhow::bail!("unsupported")
         }
     }
 

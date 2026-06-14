@@ -10,8 +10,6 @@
 //! Step 1.3 (TDD coverage of filter / arrow / Tab / Esc / Enter behavior).
 //! Concrete `NavItem` impls live next to their app-specific item types.
 
-#![allow(dead_code)]
-
 use anyhow::Result;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -47,12 +45,6 @@ pub trait NavItem: Clone {
     /// Primary filterable string ("name", "label"). Lowercase-subsequence
     /// matched against the user's filter input.
     fn filter_text(&self) -> &str;
-
-    /// Optional grouping section. Items with the same group sort together
-    /// under a `── Group ──` header. `None` means "no header for this item".
-    fn group(&self) -> Option<&str> {
-        None
-    }
 
     /// Secondary filterable tokens (element names contained inside the
     /// item, technology keywords on relationships, etc.). Used by
@@ -188,11 +180,7 @@ pub enum NavPickerMode {
         /// no-op (Filterable pickers never use it as a Down synonym; the
         /// filter input owns Tab semantics).
         allows_secondary_toggle: bool,
-        /// Footer label for the secondary-toggle state. Ignored when
-        /// `allows_secondary_toggle` is false.
-        secondary_label: &'static str,
     },
-    Flat,
 }
 
 /// Configuration for a NavPicker spawned by a c4tui call site.
@@ -248,18 +236,17 @@ impl<T: NavItem> NavPicker<T> {
         picker
     }
 
-    pub fn config(&self) -> &NavPickerConfig {
-        &self.config
-    }
-
+    #[cfg(test)]
     pub fn filter(&self) -> &str {
         &self.filter
     }
 
+    #[cfg(test)]
     pub fn show_secondary(&self) -> bool {
         self.show_secondary
     }
 
+    #[cfg(test)]
     pub fn selected_index(&self) -> usize {
         self.selected_index
     }
@@ -280,14 +267,7 @@ impl<T: NavItem> NavPicker<T> {
         &self.last_artifacts
     }
 
-    /// Borrow the visible items in display order. Cheap: walks the cached
-    /// index list rather than re-filtering.
-    pub fn visible_items(&self) -> impl Iterator<Item = &T> {
-        self.visible_indices
-            .iter()
-            .filter_map(|&idx| self.items.get(idx))
-    }
-
+    #[cfg(test)]
     pub fn visible_len(&self) -> usize {
         self.visible_indices.len()
     }
@@ -316,7 +296,6 @@ impl<T: NavItem> NavPicker<T> {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> NavOutcome<T::Output> {
-        let allows_filter = matches!(self.config.mode, NavPickerMode::Filterable { .. });
         let allows_secondary_toggle = matches!(
             self.config.mode,
             NavPickerMode::Filterable {
@@ -361,7 +340,7 @@ impl<T: NavItem> NavPicker<T> {
                 self.dirty.mark_image_placement(DirtyReason::Input);
                 NavOutcome::Continue
             }
-            KeyEvent::Back if allows_filter => {
+            KeyEvent::Back => {
                 if self.filter.pop().is_some() {
                     self.recompute_visible_indices();
                     self.clamp_selection();
@@ -370,7 +349,7 @@ impl<T: NavItem> NavPicker<T> {
                 }
                 NavOutcome::Continue
             }
-            KeyEvent::Char(c) if allows_filter => {
+            KeyEvent::Char(c) => {
                 self.filter.push(c);
                 self.recompute_visible_indices();
                 self.clamp_selection();
@@ -603,20 +582,7 @@ mod tests {
             cell_rows: 2,
             mode: NavPickerMode::Filterable {
                 allows_secondary_toggle: allows_secondary,
-                secondary_label: "secondary",
             },
-        }
-    }
-
-    fn flat_config() -> NavPickerConfig {
-        NavPickerConfig {
-            id: ComponentId::new("test"),
-            title: " test ".into(),
-            footer_hint: " hint ".into(),
-            default_header: "hdr".into(),
-            min_cell_cols: 10,
-            cell_rows: 2,
-            mode: NavPickerMode::Flat,
         }
     }
 
@@ -650,31 +616,6 @@ mod tests {
     }
 
     #[test]
-    fn flat_picker_ignores_char_keys() {
-        let mut p = NavPicker::new(
-            flat_config(),
-            items(&[("apple", 1, false), ("banana", 2, false)]),
-            0,
-        );
-        let outcome = p.handle_key(KeyEvent::Char('b'));
-        assert_eq!(outcome, NavOutcome::Continue);
-        assert_eq!(p.filter(), "");
-        // Enter should still produce the first item, not the second.
-        assert_eq!(p.handle_key(KeyEvent::Enter), NavOutcome::Select(1));
-    }
-
-    #[test]
-    fn flat_picker_tab_is_noop() {
-        // Per project's rip-and-replace policy: NavPicker no longer treats
-        // Tab as a Down synonym for Flat pickers. Down stays bound to Down;
-        // Tab in a Flat picker is a no-op. Migrating consumers update their
-        // tests / keymaps to bind Down explicitly.
-        let mut p = NavPicker::new(flat_config(), items(&[("a", 1, false), ("b", 2, false)]), 0);
-        p.handle_key(KeyEvent::Tab);
-        assert_eq!(p.handle_key(KeyEvent::Enter), NavOutcome::Select(1));
-    }
-
-    #[test]
     fn tab_in_filterable_without_toggle_is_noop() {
         // Filterable pickers configured with allows_secondary_toggle: false
         // (the mode used by the child-view picker) must treat Tab as a no-op:
@@ -704,7 +645,11 @@ mod tests {
 
     #[test]
     fn arrows_wrap_through_visible() {
-        let mut p = NavPicker::new(flat_config(), items(&[("a", 1, false), ("b", 2, false)]), 0);
+        let mut p = NavPicker::new(
+            filterable_config(false),
+            items(&[("a", 1, false), ("b", 2, false)]),
+            0,
+        );
         p.handle_key(KeyEvent::Down);
         p.handle_key(KeyEvent::Down);
         assert_eq!(p.handle_key(KeyEvent::Enter), NavOutcome::Select(1));
@@ -748,8 +693,8 @@ mod tests {
     }
 
     #[test]
-    fn tab_on_flat_empty_picker_is_noop() {
-        let mut p: NavPicker<FakeItem> = NavPicker::new(flat_config(), Vec::new(), 0);
+    fn tab_on_empty_picker_without_secondary_toggle_is_noop() {
+        let mut p: NavPicker<FakeItem> = NavPicker::new(filterable_config(false), Vec::new(), 0);
         assert_eq!(p.handle_key(KeyEvent::Tab), NavOutcome::Continue);
         assert_eq!(p.selected_index(), 0);
     }

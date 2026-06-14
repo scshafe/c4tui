@@ -49,10 +49,6 @@ impl NavItem for LinkCandidate {
         &self.label
     }
 
-    fn group(&self) -> Option<&str> {
-        Some(self.kind.label())
-    }
-
     fn secondary_filter_tokens(&self) -> &[String] {
         &self.secondary_tokens
     }

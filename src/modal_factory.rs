@@ -144,7 +144,6 @@ fn view_picker_config() -> NavPickerConfig {
         cell_rows: 8,
         mode: NavPickerMode::Filterable {
             allows_secondary_toggle: true,
-            secondary_label: "legends",
         },
     }
 }
@@ -159,7 +158,6 @@ fn child_view_picker_config() -> NavPickerConfig {
         cell_rows: 8,
         mode: NavPickerMode::Filterable {
             allows_secondary_toggle: false,
-            secondary_label: "",
         },
     }
 }
@@ -174,7 +172,6 @@ fn link_directory_config() -> NavPickerConfig {
         cell_rows: 5,
         mode: NavPickerMode::Filterable {
             allows_secondary_toggle: false,
-            secondary_label: "",
         },
     }
 }

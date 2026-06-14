@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::config::{AppConfig, KeyBindings, ZoomConfig};
 use crate::event::{mouse_to_canvas_fraction, Command, ZoomAnchor};
 use tui_kit::input::{InputEvent, MouseEvent};
@@ -7,7 +5,7 @@ use tui_kit::keymap::{KeyMap as KitKeyMap, KeyTrigger, SpecialKey};
 use tui_kit::layout::CanvasMetrics;
 
 /// c4tui's keymap: a `tui_kit::keymap::KeyMap<Command>` with the
-/// app-defined `defaults` factory and `resolve` for mouse events.
+/// app-defined default bindings and `resolve` for mouse events.
 pub type KeyMap = KitKeyMap<Command>;
 
 /// Number of terminal rows occupied by the status bar at the top of the
@@ -17,17 +15,12 @@ pub type KeyMap = KitKeyMap<Command>;
 const STATUS_ROWS: u16 = 1;
 
 pub trait KeyMapExt {
-    fn defaults(keys: &KeyBindings) -> Self;
     fn defaults_with(keys: &KeyBindings, zoom: ZoomConfig) -> Self;
     fn from_app_config(config: &AppConfig) -> Self;
     fn resolve(&self, event: InputEvent, canvas: CanvasMetrics) -> Command;
 }
 
 impl KeyMapExt for KeyMap {
-    fn defaults(keys: &KeyBindings) -> Self {
-        Self::defaults_with(keys, ZoomConfig::default())
-    }
-
     fn from_app_config(config: &AppConfig) -> Self {
         Self::defaults_with(&config.keys, config.zoom)
     }
@@ -178,7 +171,7 @@ mod tests {
     use tui_kit::layout::{CellPixel, CellSize};
 
     fn defaults() -> KeyMap {
-        <KeyMap as KeyMapExt>::defaults(&KeyBindings::default())
+        <KeyMap as KeyMapExt>::defaults_with(&KeyBindings::default(), ZoomConfig::default())
     }
 
     fn test_canvas() -> CanvasMetrics {

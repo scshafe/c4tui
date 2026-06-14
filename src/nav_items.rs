@@ -12,8 +12,6 @@
 //! (`SelectView` vs `Drill`) carries the variant intent that the newtype
 //! previously encoded.
 
-#![allow(dead_code)]
-
 use ratatui::style::{Modifier, Style};
 
 use crate::ids::ViewId;
@@ -51,7 +49,6 @@ pub struct ViewNavItem {
     pub name: String,
     pub key: String,
     pub element_names: Vec<String>,
-    pub description: Option<String>,
 }
 
 impl ViewNavItem {
@@ -92,7 +89,6 @@ impl ViewNavItem {
             name: info.name.clone(),
             key: info.key.clone(),
             element_names,
-            description: info.description.clone(),
         }
     }
 }
@@ -107,10 +103,6 @@ impl NavItem for ViewNavItem {
         // searchable -- this is a deliberate narrowing of the legacy
         // picker's filter surface, locked in by `nav_picker.rs` tests.
         &self.name
-    }
-
-    fn group(&self) -> Option<&str> {
-        Some(self.kind.label())
     }
 
     fn secondary_filter_tokens(&self) -> &[String] {
@@ -230,7 +222,6 @@ mod tests {
         let item = &items[0];
 
         assert_eq!(item.filter_text(), "Landscape");
-        assert_eq!(item.group(), Some("SystemContext"));
         assert_eq!(item.secondary_filter_tokens(), &["User".to_owned()]);
         assert_eq!(item.outcome(), ViewId::new(0));
         assert!(!item.is_secondary());

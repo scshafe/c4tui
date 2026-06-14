@@ -77,8 +77,3 @@ pub enum Command {
     CycleZoomStep,
     Noop,
 }
-
-// Re-export for downstream modules that want the unified union without
-// reaching through `tui_kit::input::`.
-#[allow(unused_imports)]
-pub use tui_kit::input::InputEvent as TuiKitInputEvent;

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! In-memory + optional-file logger that never writes to stderr.
 //!
 //! While c4tui owns the alt screen, anything written to stderr corrupts the
@@ -69,16 +67,13 @@ impl LogBuffer {
         self.entries.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
     pub fn clear(&mut self) {
         self.entries.clear();
     }
 
     /// Render every entry as `level target — message` separated by `\n`.
-    pub fn render_all(&self) -> String {
+    #[cfg(test)]
+    fn render_all(&self) -> String {
         let mut out = String::new();
         for (idx, entry) in self.entries.iter().enumerate() {
             if idx > 0 {

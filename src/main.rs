@@ -33,7 +33,6 @@ use cli::Cli;
 use clipboard::DefaultClipboard;
 use config::load_config;
 use log::info;
-use logger::SharedLogBuffer;
 use render::RasterBudget;
 use render_cache::RenderCache;
 use std::time::Duration;
@@ -133,9 +132,6 @@ fn run() -> Result<()> {
 
     Ok(())
 }
-
-#[allow(dead_code)]
-fn _expose_log_buffer_type(_: SharedLogBuffer) {}
 
 fn load_view_parts(
     workspace: &WorkspaceSource,

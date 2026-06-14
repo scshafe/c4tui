@@ -49,17 +49,6 @@ impl TerminalSession {
         self.workspace_path = Some(path);
     }
 
-    #[allow(dead_code)]
-    pub fn set_footer_bar(&mut self, bar: StatusBar) {
-        self.footer_bar = bar;
-    }
-
-    #[allow(dead_code)]
-    pub fn with_status_bar(mut self, status_bar: StatusBar) -> Self {
-        self.status_bar = status_bar;
-        self
-    }
-
     pub fn canvas(&self) -> CanvasMetrics {
         let metrics = self.inner.metrics();
         let reserved = STATUS_ROWS + FOOTER_ROWS;
@@ -102,7 +91,6 @@ impl TerminalSession {
             let workspace_path = self.workspace_path.as_deref();
             let context = StatusContext {
                 view: &view,
-                view_id,
                 breadcrumb_names: breadcrumb_refs,
                 transform,
                 placement,
