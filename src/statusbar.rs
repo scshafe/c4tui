@@ -337,7 +337,7 @@ mod tests {
     use super::*;
     use crate::config::AppConfig;
     use crate::render::RenderedView;
-    use tui_kit::layout::{CellPixel, CellSize, PixelSize};
+    use tui_kit::layout::{CellPixel, CellSize, PixelSize, PlacementEngine, PlacementPolicy};
 
     fn rendered() -> RenderedView {
         RenderedView {
@@ -369,11 +369,14 @@ mod tests {
         config: &'a AppConfig,
     ) -> StatusContext<'a> {
         let canvas = CanvasMetrics::new(CellSize::new(120, 30), CellPixel::new(8, 16));
-        let placement = ViewTransform::fit().place(rendered.raster_size, canvas);
+        let transform = ViewTransform::fit();
+        let placement = PlacementEngine::new(PlacementPolicy::crop_fit_centered())
+            .unwrap()
+            .place(rendered.raster_size, canvas, transform);
         StatusContext {
             view,
             breadcrumb_names: Vec::new(),
-            transform: ViewTransform::fit(),
+            transform,
             placement,
             canvas,
             rendered,

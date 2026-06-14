@@ -61,9 +61,9 @@ pub(super) fn render_view(
         canvas_rect.width,
         canvas_rect.height,
     );
-    let parts = viewport.viewport_render_parts(cache, catalog, view_id, screen_canvas)?;
+    let mut parts = viewport.viewport_render_parts(cache, catalog, view_id, screen_canvas)?;
     session.inner.render_image_viewport(
-        parts.widget,
+        &mut parts.widget,
         image_id,
         MAIN_PLACEMENT_ID,
         parts.png,

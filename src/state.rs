@@ -707,6 +707,47 @@ mod tests {
     }
 
     #[test]
+    fn zoom_anchor_is_still_center_anchored() {
+        let (catalog, mut center_cache, mut center_viewport) = test_parts();
+        let mut center_state = AppState::default();
+        center_state
+            .apply(
+                Command::Zoom {
+                    factor: 2.0,
+                    anchor: ZoomAnchor::Center,
+                },
+                &catalog,
+                &mut center_cache,
+                &mut center_viewport,
+                canvas(),
+            )
+            .unwrap();
+
+        let (_catalog, mut cursor_cache, mut cursor_viewport) = test_parts();
+        let mut cursor_state = AppState::default();
+        cursor_state
+            .apply(
+                Command::Zoom {
+                    factor: 2.0,
+                    anchor: ZoomAnchor::Canvas {
+                        canvas_x: 0.1,
+                        canvas_y: 0.9,
+                    },
+                },
+                &catalog,
+                &mut cursor_cache,
+                &mut cursor_viewport,
+                canvas(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            center_viewport.transform(ViewId::first()),
+            cursor_viewport.transform(ViewId::first())
+        );
+    }
+
+    #[test]
     fn reload_success_resets_navigation_and_requests_cache_clear() {
         let (catalog, mut cache, mut viewport) = test_parts();
         let mut state = AppState::default();

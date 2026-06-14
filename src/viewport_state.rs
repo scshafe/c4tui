@@ -2,47 +2,43 @@ use crate::config::PlacementChoiceConfig;
 use crate::ids::{ElementId, ViewId};
 use crate::render_cache::RenderCache;
 use crate::view_catalog::ViewCatalog;
-use anyhow::{anyhow, bail, Result};
+use anyhow::Result;
 use std::collections::HashMap;
 use tui_kit::layout::{
-    CanvasMetrics, CellRect, CellRoundingPolicy, ClippedSides, ImageAnchorPolicy, ImagePoint,
-    ImageScaleBasis, ImageZoomLimitPolicy, PixelSize, Placement, PlacementAnchor, PlacementPolicy,
-    ViewTransform, MAX_SCALE, MIN_SCALE,
+    CanvasMetrics, CellRoundingPolicy, ImageAnchorPolicy, ImagePoint, ImageZoomLimitPolicy,
+    PixelSize, Placement, PlacementEngine, PlacementPolicy, ViewTransform, MAX_SCALE, MIN_SCALE,
 };
 use tui_kit::widgets::image_viewport::{
-    ImageScale, ImageViewportPlacement, ImageViewportWidget, PixelDistance, ResizePolicy,
-    ScaledPixelOffset, StepDirection, ViewportAxis, ViewportImage, ZoomDirection, ZoomFactor,
+    ImageScale, ImageViewportWidget, ResizePolicy, ScaledPixelOffset, ViewportImage,
 };
 
 #[derive(Debug)]
 pub struct ViewportState {
     transforms: HashMap<ViewId, ViewTransform>,
-    viewports: HashMap<ViewId, ImageViewportWidget>,
-    placement_policy: PlacementPolicy,
+    engine: PlacementEngine,
 }
 
 pub struct ViewportRenderParts<'a> {
     pub png: &'a [u8],
-    pub widget: &'a mut ImageViewportWidget,
+    pub widget: ImageViewportWidget,
 }
 
 impl ViewportState {
     pub fn new(placement_policy: PlacementPolicy) -> Self {
         Self {
             transforms: HashMap::new(),
-            viewports: HashMap::new(),
-            placement_policy,
+            engine: PlacementEngine::new(placement_policy.clone())
+                .expect("c4tui placement policy is valid"),
         }
     }
 
     pub fn set_placement_policy(&mut self, policy: PlacementPolicy) {
-        self.placement_policy = policy;
-        self.viewports.clear();
+        self.engine =
+            PlacementEngine::new(policy.clone()).expect("c4tui placement policy is valid");
         self.transforms.clear();
     }
 
     pub fn invalidate(&mut self, id: ViewId) {
-        self.viewports.remove(&id);
         self.transforms.remove(&id);
     }
 
@@ -57,14 +53,8 @@ impl ViewportState {
         id: ViewId,
         canvas: CanvasMetrics,
     ) -> Result<Placement> {
-        self.ensure_viewport(cache, catalog, id, canvas)?;
-        let Some(widget) = self.viewports.get(&id) else {
-            bail!("viewport was not cached after insertion");
-        };
-        let placement = widget
-            .placement()?
-            .ok_or_else(|| anyhow!("viewport has no visible placement"))?;
-        Ok(status_placement(widget, placement))
+        let image = self.rendered_size(cache, catalog, id)?;
+        Ok(self.engine.place(image, canvas, self.transform(id)))
     }
 
     pub fn viewport_render_parts<'a>(
@@ -74,16 +64,15 @@ impl ViewportState {
         id: ViewId,
         canvas: CanvasMetrics,
     ) -> Result<ViewportRenderParts<'a>> {
-        self.ensure_viewport(cache, catalog, id, canvas)?;
-        let png = cache
-            .cached_rendered_view(id)
-            .ok_or_else(|| anyhow!("rendered view was not cached after viewport insertion"))?
-            .png
-            .as_slice();
-        let widget = self
-            .viewports
-            .get_mut(&id)
-            .ok_or_else(|| anyhow!("viewport was not cached after insertion"))?;
+        let placement = self.placement(cache, catalog, id, canvas)?;
+        let rendered = cache.rendered_view(catalog, id)?;
+        let png = rendered.png.as_slice();
+        let widget = widget_from_canonical_placement(
+            rendered.raster_size,
+            &rendered.rgba,
+            canvas,
+            placement,
+        )?;
         Ok(ViewportRenderParts { png, widget })
     }
 
@@ -92,15 +81,10 @@ impl ViewportState {
         cache: &mut RenderCache,
         catalog: &ViewCatalog,
         id: ViewId,
-        canvas: CanvasMetrics,
+        _canvas: CanvasMetrics,
     ) -> Result<()> {
-        self.ensure_viewport(cache, catalog, id, canvas)?;
-        let scale_basis = self.placement_policy.scale_basis;
-        let Some(widget) = self.viewports.get_mut(&id) else {
-            bail!("viewport was not cached after insertion");
-        };
-        reset_widget_to_canvas(widget, scale_basis)?;
-        self.sync_transform_from_viewport(id);
+        let _ = self.rendered_size(cache, catalog, id)?;
+        self.transforms.insert(id, ViewTransform::fit());
         Ok(())
     }
 
@@ -115,18 +99,11 @@ impl ViewportState {
         if (factor - 1.0).abs() < f32::EPSILON {
             return Ok(());
         }
-        self.ensure_viewport(cache, catalog, id, canvas)?;
-        let Some(widget) = self.viewports.get_mut(&id) else {
-            bail!("viewport was not cached after insertion");
-        };
-        let (direction, factor) = if factor > 1.0 {
-            (ZoomDirection::In, factor as f64)
-        } else {
-            (ZoomDirection::Out, (1.0 / factor.max(f32::EPSILON)) as f64)
-        };
-        widget.set_zoom(ZoomFactor::new(factor)?);
-        widget.apply_zoom(direction)?;
-        self.sync_transform_from_viewport(id);
+        let image = self.rendered_size(cache, catalog, id)?;
+        let next = self
+            .engine
+            .zoomed_at(self.transform(id), factor, 0.5, 0.5, image, canvas);
+        self.transforms.insert(id, next);
         Ok(())
     }
 
@@ -139,14 +116,11 @@ impl ViewportState {
         dy_fraction: f32,
         canvas: CanvasMetrics,
     ) -> Result<()> {
-        self.ensure_viewport(cache, catalog, id, canvas)?;
-        let Some(widget) = self.viewports.get_mut(&id) else {
-            bail!("viewport was not cached after insertion");
-        };
-        let pixels = canvas.pixels();
-        apply_pan_step(widget, ViewportAxis::X, dx_fraction * pixels.width as f32);
-        apply_pan_step(widget, ViewportAxis::Y, dy_fraction * pixels.height as f32);
-        self.sync_transform_from_viewport(id);
+        let image = self.rendered_size(cache, catalog, id)?;
+        let next = self
+            .engine
+            .panned(self.transform(id), dx_fraction, dy_fraction, image, canvas);
+        self.transforms.insert(id, next);
         Ok(())
     }
 
@@ -182,46 +156,19 @@ impl ViewportState {
         canvas_y: f32,
         canvas: CanvasMetrics,
     ) -> Result<ImagePoint> {
-        self.ensure_viewport(cache, catalog, id, canvas)?;
-        self.viewports
-            .get(&id)
-            .ok_or_else(|| anyhow!("viewport was not cached after insertion"))?
-            .normalized_to_image(canvas_x, canvas_y)
-            .map_err(Into::into)
+        let image = self.rendered_size(cache, catalog, id)?;
+        Ok(self
+            .engine
+            .canvas_to_image(self.transform(id), canvas_x, canvas_y, image, canvas))
     }
 
-    fn ensure_viewport(
+    fn rendered_size(
         &mut self,
         cache: &mut RenderCache,
         catalog: &ViewCatalog,
         id: ViewId,
-        canvas: CanvasMetrics,
-    ) -> Result<()> {
-        if !self.viewports.contains_key(&id) {
-            let (raster_size, rgba) = {
-                let rendered = cache.rendered_view(catalog, id)?;
-                (rendered.raster_size, rendered.rgba.clone())
-            };
-            let image = ViewportImage::new(raster_size, rgba)?;
-            let mut widget = ImageViewportWidget::from_image(image, canvas);
-            widget.set_resize_policy(ResizePolicy::PreserveCenter);
-            reset_widget_to_canvas(&mut widget, self.placement_policy.scale_basis)?;
-            self.viewports.insert(id, widget);
-        }
-
-        let Some(widget) = self.viewports.get_mut(&id) else {
-            bail!("viewport was not cached after insertion");
-        };
-        widget.update_canvas(canvas);
-        self.sync_transform_from_viewport(id);
-        Ok(())
-    }
-
-    fn sync_transform_from_viewport(&mut self, id: ViewId) {
-        let Some(widget) = self.viewports.get(&id) else {
-            return;
-        };
-        self.transforms.insert(id, transform_from_widget(widget));
+    ) -> Result<PixelSize> {
+        Ok(cache.rendered_view(catalog, id)?.raster_size)
     }
 
     #[cfg(test)]
@@ -276,106 +223,25 @@ impl Default for ViewportState {
     }
 }
 
-fn reset_widget_to_canvas(
-    widget: &mut ImageViewportWidget,
-    scale_basis: ImageScaleBasis,
-) -> Result<()> {
-    let image = widget.viewport().image().size();
-    let canvas = widget.widget_pixels();
-    let scale = initial_scale(image, canvas, scale_basis);
-    widget.set_scale(ImageScale::new(scale)?);
-    let theoretical = widget.viewport().theoretical_size()?;
-    widget.set_offset(centered_offset(theoretical, canvas));
-    Ok(())
-}
-
-fn initial_scale(image: PixelSize, canvas: PixelSize, scale_basis: ImageScaleBasis) -> f64 {
-    match scale_basis {
-        ImageScaleBasis::FitToArea => fit_scale(image, canvas),
-        ImageScaleBasis::NativePixels => 1.0,
-        ImageScaleBasis::FillArea => {
-            let width = canvas.width.max(1) as f64 / image.width.max(1) as f64;
-            let height = canvas.height.max(1) as f64 / image.height.max(1) as f64;
-            width.max(height).max(f64::EPSILON)
-        }
-        ImageScaleBasis::ExplicitScale(scale) => f64::from(scale).max(f64::EPSILON),
-        _ => fit_scale(image, canvas),
-    }
-}
-
-fn fit_scale(image: PixelSize, canvas: PixelSize) -> f64 {
-    let width = canvas.width.max(1) as f64 / image.width.max(1) as f64;
-    let height = canvas.height.max(1) as f64 / image.height.max(1) as f64;
-    width.min(height).max(f64::EPSILON)
-}
-
-fn centered_offset(theoretical: PixelSize, canvas: PixelSize) -> ScaledPixelOffset {
-    ScaledPixelOffset::new(
-        (i64::from(theoretical.width) - i64::from(canvas.width)) / 2,
-        (i64::from(theoretical.height) - i64::from(canvas.height)) / 2,
-    )
-}
-
-fn apply_pan_step(widget: &mut ImageViewportWidget, axis: ViewportAxis, delta: f32) {
-    let pixels = delta.abs().round() as u32;
-    if pixels == 0 {
-        return;
-    }
-    widget.set_step(axis, PixelDistance::new(pixels));
-    let direction = if delta < 0.0 {
-        StepDirection::Negative
-    } else {
-        StepDirection::Positive
-    };
-    widget.apply_step(axis, direction);
-}
-
-fn transform_from_widget(widget: &ImageViewportWidget) -> ViewTransform {
-    let image = widget.viewport().image().size();
-    let canvas = widget.widget_pixels();
-    let fit = fit_scale(image, canvas);
-    let center = widget.normalized_to_image(0.5, 0.5).unwrap_or(ImagePoint {
-        x: image.width as f32 / 2.0,
-        y: image.height as f32 / 2.0,
-        inside: false,
-    });
-    ViewTransform {
-        scale: (widget.viewport().scale().get() / fit.max(f64::EPSILON)) as f32,
-        center_x: (center.x / image.width.max(1) as f32).clamp(0.0, 1.0),
-        center_y: (center.y / image.height.max(1) as f32).clamp(0.0, 1.0),
-    }
-}
-
-fn status_placement(widget: &ImageViewportWidget, placement: ImageViewportPlacement) -> Placement {
-    let image = widget.viewport().image().size();
-    let canvas = widget.widget_pixels();
-    let fit = fit_scale(image, canvas) as f32;
-    let effective_scale = widget.viewport().scale().get() as f32;
-    let transform = transform_from_widget(widget);
-    Placement {
-        source: placement.source,
-        size: CellRect {
-            cols: placement.cell_cols,
-            rows: placement.cell_rows,
-        },
-        origin: placement.origin,
-        effective_scale,
-        fit_scale: fit,
-        visible_pixels: placement.visible_pixels,
-        unclipped_display_pixels: placement.theoretical_pixels,
-        clipped_sides: ClippedSides {
-            left: placement.source.x > 0,
-            right: placement.source.x.saturating_add(placement.source.width) < image.width,
-            top: placement.source.y > 0,
-            bottom: placement.source.y.saturating_add(placement.source.height) < image.height,
-        },
-        anchor: PlacementAnchor {
-            image_x: transform.center_x * image.width as f32,
-            image_y: transform.center_y * image.height as f32,
-            normalized_x: transform.center_x,
-            normalized_y: transform.center_y,
-        },
-    }
+fn widget_from_canonical_placement(
+    raster_size: PixelSize,
+    rgba: &[u8],
+    canvas: CanvasMetrics,
+    placement: Placement,
+) -> Result<ImageViewportWidget> {
+    let image = ViewportImage::new(raster_size, rgba.to_vec())?;
+    let mut widget = ImageViewportWidget::from_image(image, canvas);
+    widget.set_resize_policy(ResizePolicy::PreserveCenter);
+    widget.set_scale(ImageScale::new(f64::from(placement.effective_scale))?);
+    let cell_pixel = canvas.cell_pixel.or_fallback();
+    let origin_x = i64::from(placement.origin.col) * i64::from(cell_pixel.width);
+    let origin_y = i64::from(placement.origin.row) * i64::from(cell_pixel.height);
+    let scale = f64::from(placement.effective_scale);
+    widget.set_offset(ScaledPixelOffset::new(
+        (f64::from(placement.source.x) * scale).round() as i64 - origin_x,
+        (f64::from(placement.source.y) * scale).round() as i64 - origin_y,
+    ));
+    Ok(widget)
 }
 
 pub fn diagram_placement_policy(choice: &PlacementChoiceConfig) -> PlacementPolicy {
@@ -566,6 +432,65 @@ mod tests {
         assert_eq!(after.effective_scale, before.effective_scale);
         assert!(after.source.x > before.source.x);
         assert!(after.source.y > before.source.y);
+    }
+
+    #[test]
+    fn reset_after_zoom_and_pan_restores_fit_transform() {
+        let raster = PixelSize::new(400, 200);
+        let canvas = canvas();
+        let (catalog, mut cache, mut viewport) = cached_parts(raster, legacy_crop_policy());
+        let initial = viewport
+            .placement(&mut cache, &catalog, ViewId::first(), canvas)
+            .unwrap();
+
+        viewport
+            .zoom_view(&mut cache, &catalog, ViewId::first(), 2.0, canvas)
+            .unwrap();
+        viewport
+            .pan_view(&mut cache, &catalog, ViewId::first(), 0.25, 0.25, canvas)
+            .unwrap();
+        viewport
+            .reset_viewport(&mut cache, &catalog, ViewId::first(), canvas)
+            .unwrap();
+
+        assert_eq!(viewport.transform(ViewId::first()), ViewTransform::fit());
+        assert_eq!(
+            viewport
+                .placement(&mut cache, &catalog, ViewId::first(), canvas)
+                .unwrap(),
+            initial
+        );
+    }
+
+    #[test]
+    fn materialized_widget_matches_canonical_placement() {
+        let raster = PixelSize::new(400, 200);
+        let canvas = canvas();
+        let (catalog, mut cache, mut viewport) = cached_parts(raster, legacy_crop_policy());
+
+        viewport
+            .zoom_view(&mut cache, &catalog, ViewId::first(), 2.0, canvas)
+            .unwrap();
+        viewport
+            .pan_view(&mut cache, &catalog, ViewId::first(), 0.25, 0.25, canvas)
+            .unwrap();
+        let placement = viewport
+            .placement(&mut cache, &catalog, ViewId::first(), canvas)
+            .unwrap();
+        let rendered = cache.rendered_view(&catalog, ViewId::first()).unwrap();
+        let widget = widget_from_canonical_placement(
+            rendered.raster_size,
+            &rendered.rgba,
+            canvas,
+            placement,
+        )
+        .unwrap();
+        let widget_placement = widget.placement().unwrap().unwrap();
+
+        assert_eq!(widget_placement.source, placement.source);
+        assert_eq!(widget_placement.origin, placement.origin);
+        assert_eq!(widget_placement.cell_cols, placement.size.cols);
+        assert_eq!(widget_placement.cell_rows, placement.size.rows);
     }
 
     #[test]
