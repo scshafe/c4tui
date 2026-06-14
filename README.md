@@ -4,7 +4,7 @@ Interactive terminal viewer for Structurizr C4 diagrams. It renders workspace vi
 
 ## Status
 
-Pre-alpha moving toward v1. Phases 0-6 are implemented, and the architecture hardening pass is complete: the binary detects terminal capabilities, exports/rasterizes Structurizr SVG views, displays them with Kitty graphics, provides a keyboard view picker with per-view image caching, supports pan/zoom via Kitty source rectangles, keyboard-first link traversal, optional mouse drill, reload, help, config, and file logging. See [implementation-plan.md](./implementation-plan.md) for the phased roadmap.
+Pre-alpha moving toward v1. Phases 0-6 are implemented, and the architecture hardening pass is complete: the binary detects terminal capabilities, exports/rasterizes Structurizr SVG views, displays them with Kitty graphics, provides a keyboard view picker with per-view image caching, supports pan/zoom via Kitty source rectangles, keyboard-first link traversal, optional mouse drill, reload, help, config, and file logging. The original delivery plan is archived at [docs/archive/historical-plan-phase-0-6.md](./docs/archive/historical-plan-phase-0-6.md).
 
 ## Install
 
@@ -174,10 +174,10 @@ c4tui shells out to `structurizr export --workspace … --format svg --output �
 
 - [specification.md](./specification.md) — what c4tui does, contracts, failure modes
 - [architecture.md](./architecture.md) — components, data flow, technology choices
-- [implementation-plan.md](./implementation-plan.md) — phased delivery and acceptance criteria
 - [docs/c4tui.1](./docs/c4tui.1) — man page source
 - [docs/releasing.md](./docs/releasing.md) — release automation and required secrets
-- [docs/architecture-redesign-plan.md](./docs/architecture-redesign-plan.md) — completed architecture hardening pass
+- [docs/archive/historical-plan-phase-0-6.md](./docs/archive/historical-plan-phase-0-6.md) — archived original delivery plan
+- [docs/archive/architecture-redesign-plan.md](./docs/archive/architecture-redesign-plan.md) — archived architecture hardening plan
 
 ## License
 

@@ -1,8 +1,8 @@
 # c4tui - Specification
 
 This document describes what c4tui does. The implementation structure lives in
-[architecture.md](./architecture.md); delivery planning lives in
-[implementation-plan.md](./implementation-plan.md).
+[architecture.md](./architecture.md). Historical delivery planning is archived
+in [docs/archive/historical-plan-phase-0-6.md](./docs/archive/historical-plan-phase-0-6.md).
 
 ## 1. Purpose
 
