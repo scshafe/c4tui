@@ -314,13 +314,14 @@ fn click_on_element_with_multiple_related_views_opens_picker_and_drills() {
     let mut app = test_app_with_related_view_svgs(dir.path(), tx);
     let mut terminal = FakeTerminalBackend::new();
 
-    app.handle_input(
+    app.handle_input_event(
         InputEvent::Mouse(MouseEvent::Click { x: 41, y: 14 }),
         &mut terminal,
     )
     .unwrap();
-    app.handle_key_event(KeyEvent::Down, &mut terminal).unwrap();
-    app.handle_key_event(KeyEvent::Enter, &mut terminal)
+    app.handle_input_event(InputEvent::Key(KeyEvent::Down), &mut terminal)
+        .unwrap();
+    app.handle_input_event(InputEvent::Key(KeyEvent::Enter), &mut terminal)
         .unwrap();
 
     assert_eq!(app.state.current(), ViewId::new(2));
@@ -344,12 +345,13 @@ fn related_view_picker_cancel_preserves_current_view() {
     let mut app = test_app_with_related_view_svgs(dir.path(), tx);
     let mut terminal = FakeTerminalBackend::new();
 
-    app.handle_input(
+    app.handle_input_event(
         InputEvent::Mouse(MouseEvent::Click { x: 41, y: 14 }),
         &mut terminal,
     )
     .unwrap();
-    app.handle_key_event(KeyEvent::Esc, &mut terminal).unwrap();
+    app.handle_input_event(InputEvent::Key(KeyEvent::Esc), &mut terminal)
+        .unwrap();
 
     assert_eq!(app.state.current(), ViewId::first());
     assert!(app.state.render_frame().breadcrumbs.is_empty());
