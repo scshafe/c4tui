@@ -1,6 +1,6 @@
 use crate::ids::{ElementId, ViewId};
 use crate::nav_picker::{truncate, NavCellCanvas, NavItem, NavRenderArtifact};
-use crate::view::{ConnectionDirection, ViewStore};
+use crate::view_catalog::{ConnectionDirection, ViewCatalog};
 use ratatui::style::{Modifier, Style};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,23 +113,23 @@ impl NavItem for LinkCandidate {
 }
 
 pub fn collect_link_candidates(
-    store: &ViewStore,
+    catalog: &ViewCatalog,
     current: ViewId,
     pinned_element: Option<&ElementId>,
 ) -> Vec<LinkCandidate> {
     let mut candidates = Vec::new();
-    let current_view = store.view(current);
+    let current_view = catalog.view(current);
 
     for (source_element, child_keys) in &current_view.child_view_keys_by_element_id {
         for child_key in child_keys {
-            let Some(target_view) = view_id_by_key(store, child_key) else {
+            let Some(target_view) = catalog.view_id_by_key(child_key) else {
                 continue;
             };
             if target_view == current {
                 continue;
             }
-            let source_name = element_label(store, source_element);
-            let view = store.view(target_view);
+            let source_name = element_label(catalog, source_element);
+            let view = catalog.view(target_view);
             candidates.push(LinkCandidate {
                 kind: LinkKind::Detail,
                 target_view,
@@ -148,13 +148,13 @@ pub fn collect_link_candidates(
     }
 
     if let Some(source_element) = pinned_element {
-        for candidate in store.connection_candidates_for_element(current, source_element) {
+        for candidate in catalog.connection_candidates_for_element(current, source_element) {
             let kind = match candidate.direction {
                 ConnectionDirection::Outgoing => LinkKind::ConnectionOutgoing,
                 ConnectionDirection::Incoming => LinkKind::ConnectionIncoming,
             };
-            let connected_name = element_label(store, &candidate.connected_element_id);
-            let relationship = store.model.relationships.get(&candidate.relationship_id);
+            let connected_name = element_label(catalog, &candidate.connected_element_id);
+            let relationship = catalog.model.relationships.get(&candidate.relationship_id);
             let relationship_detail = match (
                 relationship.and_then(|rel| rel.description.as_deref()),
                 relationship.and_then(|rel| rel.technology.as_deref()),
@@ -168,7 +168,7 @@ pub fn collect_link_candidates(
                 ConnectionDirection::Outgoing => "to",
                 ConnectionDirection::Incoming => "from",
             };
-            let view = store.view(candidate.view_id);
+            let view = catalog.view(candidate.view_id);
             candidates.push(LinkCandidate {
                 kind,
                 target_view: candidate.view_id,
@@ -190,9 +190,9 @@ pub fn collect_link_candidates(
     }
 
     if let Some(key_view_key) = &current_view.key_view_key {
-        if let Some(target_view) = view_id_by_key(store, key_view_key) {
+        if let Some(target_view) = catalog.view_id_by_key(key_view_key) {
             if target_view != current {
-                let view = store.view(target_view);
+                let view = catalog.view(target_view);
                 candidates.push(LinkCandidate {
                     kind: LinkKind::Legend,
                     target_view,
@@ -228,16 +228,8 @@ pub fn collect_link_candidates(
     candidates
 }
 
-fn view_id_by_key(store: &ViewStore, key: &str) -> Option<ViewId> {
-    store
-        .views
-        .iter()
-        .position(|view| view.key == key)
-        .map(ViewId::new)
-}
-
-fn element_label(store: &ViewStore, element_id: &ElementId) -> String {
-    store
+fn element_label(catalog: &ViewCatalog, element_id: &ElementId) -> String {
+    catalog
         .model
         .elements
         .get(element_id)
@@ -248,17 +240,9 @@ fn element_label(store: &ViewStore, element_id: &ElementId) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::RasterBudget;
     use crate::workspace::{
         ElementKind, ElementMetadata, RelationshipMetadata, ViewInfo, ViewKind, WorkspaceModel,
     };
-
-    fn budget() -> RasterBudget {
-        RasterBudget {
-            quality: 1.0,
-            ..RasterBudget::default()
-        }
-    }
 
     fn element(id: &str, name: &str) -> (ElementId, ElementMetadata) {
         let id = ElementId::new(id);
@@ -315,7 +299,7 @@ mod tests {
         }
     }
 
-    fn store() -> ViewStore {
+    fn catalog() -> ViewCatalog {
         let mut model = WorkspaceModel::default();
         for (id, element) in [
             element("api", "API"),
@@ -335,44 +319,41 @@ mod tests {
         model.relationships.insert(outgoing.id.clone(), outgoing);
         model.relationships.insert(incoming.id.clone(), incoming);
 
-        ViewStore::new(
-            vec![
-                view(
-                    "current",
-                    "Current",
-                    ViewKind::Container,
-                    &["api", "database", "browser"],
-                    &[("api", &["api-detail", "api-detail"][..])],
-                    Some("current-key"),
-                ),
-                view(
-                    "api-detail",
-                    "API Detail",
-                    ViewKind::Component,
-                    &["api"],
-                    &[],
-                    None,
-                ),
-                view(
-                    "database-view",
-                    "Database View",
-                    ViewKind::Component,
-                    &["database"],
-                    &[],
-                    None,
-                ),
-                view(
-                    "browser-view",
-                    "Browser View",
-                    ViewKind::SystemContext,
-                    &["browser"],
-                    &[],
-                    None,
-                ),
-                view("current-key", "Current Key", ViewKind::Key, &[], &[], None),
-            ],
-            budget(),
-        )
+        ViewCatalog::new(vec![
+            view(
+                "current",
+                "Current",
+                ViewKind::Container,
+                &["api", "database", "browser"],
+                &[("api", &["api-detail", "api-detail"][..])],
+                Some("current-key"),
+            ),
+            view(
+                "api-detail",
+                "API Detail",
+                ViewKind::Component,
+                &["api"],
+                &[],
+                None,
+            ),
+            view(
+                "database-view",
+                "Database View",
+                ViewKind::Component,
+                &["database"],
+                &[],
+                None,
+            ),
+            view(
+                "browser-view",
+                "Browser View",
+                ViewKind::SystemContext,
+                &["browser"],
+                &[],
+                None,
+            ),
+            view("current-key", "Current Key", ViewKind::Key, &[], &[], None),
+        ])
         .unwrap()
         .with_model(model)
     }
@@ -380,7 +361,7 @@ mod tests {
     #[test]
     fn collects_detail_connection_and_legend_candidates() {
         let candidates =
-            collect_link_candidates(&store(), ViewId::first(), Some(&ElementId::new("api")));
+            collect_link_candidates(&catalog(), ViewId::first(), Some(&ElementId::new("api")));
 
         assert_eq!(
             candidates
@@ -418,7 +399,7 @@ mod tests {
 
     #[test]
     fn omits_connection_candidates_without_pinned_element() {
-        let candidates = collect_link_candidates(&store(), ViewId::first(), None);
+        let candidates = collect_link_candidates(&catalog(), ViewId::first(), None);
 
         assert_eq!(
             candidates
@@ -432,7 +413,7 @@ mod tests {
     #[test]
     fn link_candidate_filter_tokens_include_source_and_target_context() {
         let candidates =
-            collect_link_candidates(&store(), ViewId::first(), Some(&ElementId::new("api")));
+            collect_link_candidates(&catalog(), ViewId::first(), Some(&ElementId::new("api")));
         let detail = candidates
             .iter()
             .find(|candidate| candidate.kind == LinkKind::Detail)

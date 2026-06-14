@@ -14,11 +14,13 @@ mod modal;
 mod nav_items;
 mod nav_picker;
 mod render;
+mod render_cache;
 mod render_pool;
 mod state;
 mod statusbar;
 mod terminal;
-mod view;
+mod view_catalog;
+mod viewport_state;
 mod workspace;
 
 use anyhow::{bail, Context, Result};
@@ -31,9 +33,11 @@ use config::load_config;
 use log::info;
 use logger::SharedLogBuffer;
 use render::RasterBudget;
+use render_cache::RenderCache;
 use std::time::Duration;
 use terminal::TerminalSession;
-use view::ViewStore;
+use view_catalog::ViewCatalog;
+use viewport_state::{diagram_placement_policy, ViewportState};
 use workspace::{
     discover_views, export_workspace, load_workspace_model, resolve_workspace, WorkspaceSource,
 };
@@ -82,7 +86,7 @@ fn run() -> Result<()> {
     let workspace = resolve_workspace(cli.workspace.as_deref().expect("checked above"))?;
     let mut terminal = TerminalSession::enter(config.clone())?;
     terminal.set_workspace_path(workspace.path.clone());
-    let view_store = match load_view_store(
+    let view_parts = match load_view_parts(
         &workspace,
         &cli.svg_format,
         config.raster_budget,
@@ -115,7 +119,7 @@ fn run() -> Result<()> {
     let _watcher = watcher;
     let clipboard: Box<dyn clipboard::Clipboard> = Box::new(DefaultClipboard);
     let mut app = App::new(
-        view_store,
+        view_parts,
         workspace,
         cli.svg_format,
         config,
@@ -131,20 +135,21 @@ fn run() -> Result<()> {
 #[allow(dead_code)]
 fn _expose_log_buffer_type(_: SharedLogBuffer) {}
 
-fn load_view_store(
+fn load_view_parts(
     workspace: &WorkspaceSource,
     svg_format: &str,
     budget: RasterBudget,
     placement: &config::PlacementChoiceConfig,
-) -> Result<ViewStore> {
+) -> Result<(ViewCatalog, RenderCache, ViewportState)> {
     let exported = export_workspace(workspace, svg_format)?;
     let views = discover_views(&exported)?;
     let model = load_workspace_model(&exported);
-    let policy = view::diagram_placement_policy(placement);
-    ViewStore::new(views, budget).map(|store| {
-        store
+    let policy = diagram_placement_policy(placement);
+    Ok((
+        ViewCatalog::new(views)?
             .with_model(model)
-            .with_export(exported)
-            .with_placement_policy(policy)
-    })
+            .with_export(exported),
+        RenderCache::new(budget),
+        ViewportState::new(policy),
+    ))
 }

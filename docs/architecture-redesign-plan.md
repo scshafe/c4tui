@@ -55,7 +55,7 @@ Tasks:
   - `ElementId(String)` newtype.
 - Convert public structs and methods to typed IDs:
   - `ViewInfo.key` remains a Structurizr view key string, but runtime selection uses `ViewId`.
-  - `ViewStore::{view, rendered_view, transform, set_transform, child_view_at_canvas_point}` use `ViewId`.
+  - `ViewCatalog`, `RenderCache`, and `ViewportState` APIs use `ViewId`.
   - `ElementBBox.element_id` and `child_view_by_element_id` use `ElementId`.
 - Keep internal indexing via `ViewId::index()` to avoid churn.
 - Update tests around view lookup and hit testing.
@@ -95,7 +95,13 @@ Tasks:
   pub trait TerminalBackend {
       fn size(&self) -> TerminalSize;
       fn read_input(&mut self) -> Result<InputEvent>;
-      fn render(&mut self, frame: &RenderFrame, store: &mut ViewStore) -> Result<()>;
+      fn render(
+          &mut self,
+          frame: &RenderFrame,
+          catalog: &ViewCatalog,
+          cache: &mut RenderCache,
+          viewport: &mut ViewportState,
+      ) -> Result<()>;
       fn clear_image_cache(&mut self) -> Result<()>;
       fn show_blocking_dialog(&mut self, frame: &RenderFrame) -> Result<()>;
   }

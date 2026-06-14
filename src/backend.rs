@@ -1,24 +1,37 @@
 use crate::config::KeyBindings;
 use crate::ids::ViewId;
 use crate::modal::Modal;
+use crate::render_cache::RenderCache;
 use crate::state::RenderFrame;
-use crate::view::ViewStore;
+use crate::view_catalog::ViewCatalog;
+use crate::viewport_state::ViewportState;
 use anyhow::Result;
 use tui_kit::layout::CanvasMetrics;
 
 pub trait TerminalBackend {
     fn canvas_metrics(&self) -> CanvasMetrics;
-    fn render(&mut self, frame: &RenderFrame, store: &mut ViewStore) -> Result<()>;
+    fn render(
+        &mut self,
+        frame: &RenderFrame,
+        catalog: &ViewCatalog,
+        cache: &mut RenderCache,
+        viewport: &mut ViewportState,
+    ) -> Result<()>;
     fn teardown_image_viewport(&mut self, view_id: ViewId) -> Result<()>;
     /// Render a modal onto the screen. The modal's
     /// `pre_render_placements_to_clear`, `clear_all_placements_pre_render`,
     /// and `post_render_thumbnails` hooks drive image-pipeline side effects;
     /// the `store` argument supplies the cached rasters needed to paint
     /// thumbnail placements.
-    fn render_modal(&mut self, modal: &mut dyn Modal, store: &ViewStore) -> Result<()>;
-    /// Tear down any picker-placement slots the modal owned. `store` is
+    fn render_modal(
+        &mut self,
+        modal: &mut dyn Modal,
+        catalog: &ViewCatalog,
+        cache: &RenderCache,
+    ) -> Result<()>;
+    /// Tear down any picker-placement slots the modal owned. `catalog` is
     /// used to enumerate per-view placement ids.
-    fn close_modal(&mut self, store: &ViewStore) -> Result<()>;
+    fn close_modal(&mut self, catalog: &ViewCatalog) -> Result<()>;
     fn clear_image_cache(&mut self) -> Result<()>;
     fn show_message(&mut self, title: &str, message: &str) -> Result<()>;
     fn show_error(&mut self, title: &str, message: &str) -> Result<()>;
@@ -76,7 +89,13 @@ pub mod fake {
             self.canvas
         }
 
-        fn render(&mut self, frame: &RenderFrame, _store: &mut ViewStore) -> Result<()> {
+        fn render(
+            &mut self,
+            frame: &RenderFrame,
+            _catalog: &ViewCatalog,
+            _cache: &mut RenderCache,
+            _viewport: &mut ViewportState,
+        ) -> Result<()> {
             self.calls.push(FakeTerminalCall::Render(frame.current));
             self.rendered_frames.push(frame.clone());
             Ok(())
@@ -89,13 +108,18 @@ pub mod fake {
             Ok(())
         }
 
-        fn render_modal(&mut self, _modal: &mut dyn Modal, _store: &ViewStore) -> Result<()> {
+        fn render_modal(
+            &mut self,
+            _modal: &mut dyn Modal,
+            _catalog: &ViewCatalog,
+            _cache: &RenderCache,
+        ) -> Result<()> {
             self.calls.push(FakeTerminalCall::RenderModal);
             self.modal_renders += 1;
             Ok(())
         }
 
-        fn close_modal(&mut self, _store: &ViewStore) -> Result<()> {
+        fn close_modal(&mut self, _catalog: &ViewCatalog) -> Result<()> {
             self.calls.push(FakeTerminalCall::CloseModal);
             Ok(())
         }

@@ -3,9 +3,11 @@ use crate::config::{AppConfig, KeyBindings};
 use crate::ids::{ElementId, ViewId};
 use crate::log_view::LogView;
 use crate::modal::Modal;
+use crate::render_cache::RenderCache;
 use crate::state::RenderFrame;
 use crate::statusbar::{default_footer_bar, default_status_bar, StatusBar, StatusContext};
-use crate::view::{image_id_for_view, ViewStore};
+use crate::view_catalog::{image_id_for_view, ViewCatalog};
+use crate::viewport_state::ViewportState;
 use crate::workspace::ConnectionCounts;
 use anyhow::Result;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -70,45 +72,53 @@ impl TerminalSession {
 
     fn render_view(
         &mut self,
-        view_id: ViewId,
-        breadcrumbs: &[ViewId],
-        pinned_element: Option<&crate::ids::ElementId>,
-        render_progress: Option<(usize, usize)>,
-        store: &mut ViewStore,
+        frame: &RenderFrame,
+        catalog: &ViewCatalog,
+        cache: &mut RenderCache,
+        viewport: &mut ViewportState,
     ) -> Result<()> {
         let canvas = self.canvas();
+        let view_id = frame.current;
         let image_id = image_id_for_view(view_id);
-        let placement = store.placement(view_id, canvas)?;
-        let transform = store.transform(view_id);
+        let placement = viewport.placement(cache, catalog, view_id, canvas)?;
+        let transform = viewport.transform(view_id);
 
-        let view = store.view(view_id).clone();
-        let breadcrumb_names: Vec<String> = breadcrumbs
+        let view = catalog.view(view_id).clone();
+        let breadcrumb_names: Vec<String> = frame
+            .breadcrumbs
             .iter()
-            .map(|id| store.view(*id).name.clone())
+            .map(|id| catalog.view(*id).name.clone())
             .collect();
-        let pinned_meta = pinned_element
-            .and_then(|id| store.element_metadata(id))
+        let pinned_meta = frame
+            .pinned_element
+            .as_ref()
+            .and_then(|id| catalog.element_metadata(id))
             .cloned();
-        let pinned_connection_counts = pinned_connection_counts(view_id, pinned_element, store);
-        let rendered = store.rendered_view(view_id)?;
-        let breadcrumb_refs: Vec<&str> = breadcrumb_names.iter().map(String::as_str).collect();
-        let workspace_path = self.workspace_path.as_deref();
-        let context = StatusContext {
-            view: &view,
-            view_id,
-            breadcrumb_names: breadcrumb_refs,
-            transform,
-            placement,
-            canvas,
-            rendered,
-            config: &self.config,
-            pinned_element: pinned_meta.as_ref(),
-            pinned_element_connections: pinned_connection_counts,
-            render_progress,
-            workspace_path,
+        let pinned_connection_counts =
+            pinned_connection_counts(view_id, frame.pinned_element.as_ref(), catalog);
+        let (status_text, footer_text) = {
+            let rendered = cache.rendered_view(catalog, view_id)?;
+            let breadcrumb_refs: Vec<&str> = breadcrumb_names.iter().map(String::as_str).collect();
+            let workspace_path = self.workspace_path.as_deref();
+            let context = StatusContext {
+                view: &view,
+                view_id,
+                breadcrumb_names: breadcrumb_refs,
+                transform,
+                placement,
+                canvas,
+                rendered,
+                config: &self.config,
+                pinned_element: pinned_meta.as_ref(),
+                pinned_element_connections: pinned_connection_counts,
+                render_progress: frame.render_progress,
+                workspace_path,
+            };
+            (
+                self.status_bar.render(&context, canvas.cells.cols),
+                self.footer_bar.render(&context, canvas.cells.cols),
+            )
         };
-        let status_text = self.status_bar.render(&context, canvas.cells.cols);
-        let footer_text = self.footer_bar.render(&context, canvas.cells.cols);
 
         let mut canvas_rect = Rect::default();
         self.inner.draw(|frame| {
@@ -134,7 +144,7 @@ impl TerminalSession {
             canvas_rect.width,
             canvas_rect.height,
         );
-        let parts = store.viewport_render_parts(view_id, screen_canvas)?;
+        let parts = viewport.viewport_render_parts(cache, catalog, view_id, screen_canvas)?;
         self.inner.render_image_viewport(
             parts.widget,
             image_id,
@@ -146,12 +156,12 @@ impl TerminalSession {
         Ok(())
     }
 
-    pub fn close_modal_inner(&mut self, store: &ViewStore) -> Result<()> {
+    pub fn close_modal_inner(&mut self, catalog: &ViewCatalog) -> Result<()> {
         // Tear down every per-view picker placement. Connection-picker /
         // log variants never registered placements, so this is a no-op for
         // them — keeping one path is honest.
         self.inner
-            .teardown_image_viewports((0..store.views.len()).map(|index| {
+            .teardown_image_viewports((0..catalog.view_count()).map(|index| {
                 (
                     image_id_for_view(ViewId::new(index)),
                     picker_placement_id(index),
@@ -168,7 +178,12 @@ impl TerminalSession {
         Ok(())
     }
 
-    pub fn render_modal_inner(&mut self, modal: &mut dyn Modal, store: &ViewStore) -> Result<()> {
+    pub fn render_modal_inner(
+        &mut self,
+        modal: &mut dyn Modal,
+        catalog: &ViewCatalog,
+        cache: &RenderCache,
+    ) -> Result<()> {
         for placement_id in modal.pre_render_placements_to_clear() {
             self.inner.images().delete_placement(placement_id)?;
         }
@@ -198,7 +213,7 @@ impl TerminalSession {
                 .iter()
                 .map(|t| picker_placement_id(t.view_id.index()))
                 .collect();
-            let placements_to_clear: Vec<(u32, u32)> = (0..store.views.len())
+            let placements_to_clear: Vec<(u32, u32)> = (0..catalog.view_count())
                 .map(|index| {
                     (
                         image_id_for_view(ViewId::new(index)),
@@ -210,7 +225,7 @@ impl TerminalSession {
             self.inner.teardown_image_viewports(placements_to_clear)?;
 
             for thumb in &thumbs {
-                self.draw_thumbnail(thumb.view_id, thumb.area, store)?;
+                self.draw_thumbnail(thumb.view_id, thumb.area, cache)?;
             }
         }
         self.inner.images().flush()?;
@@ -221,10 +236,10 @@ impl TerminalSession {
         &mut self,
         view_id: ViewId,
         area: CellArea,
-        store: &ViewStore,
+        cache: &RenderCache,
     ) -> Result<bool> {
         let image_id = image_id_for_view(view_id);
-        let Some(rendered) = store.cached_rendered_view(view_id) else {
+        let Some(rendered) = cache.cached_rendered_view(view_id) else {
             return Ok(false);
         };
         let image = ViewportImage::new(rendered.raster_size, rendered.rgba.clone())?;
@@ -289,10 +304,10 @@ impl TerminalSession {
 fn pinned_connection_counts(
     view_id: ViewId,
     pinned_element: Option<&ElementId>,
-    store: &ViewStore,
+    catalog: &ViewCatalog,
 ) -> Option<ConnectionCounts> {
     pinned_element
-        .map(|id| store.connection_candidate_counts_for_element(view_id, id))
+        .map(|id| catalog.connection_candidate_counts_for_element(view_id, id))
         .filter(|connections| connections.total() > 0)
 }
 
@@ -301,27 +316,31 @@ impl TerminalBackend for TerminalSession {
         Self::canvas(self)
     }
 
-    fn render(&mut self, frame: &RenderFrame, store: &mut ViewStore) -> Result<()> {
-        Self::render_view(
-            self,
-            frame.current,
-            &frame.breadcrumbs,
-            frame.pinned_element.as_ref(),
-            frame.render_progress,
-            store,
-        )
+    fn render(
+        &mut self,
+        frame: &RenderFrame,
+        catalog: &ViewCatalog,
+        cache: &mut RenderCache,
+        viewport: &mut ViewportState,
+    ) -> Result<()> {
+        Self::render_view(self, frame, catalog, cache, viewport)
     }
 
     fn teardown_image_viewport(&mut self, view_id: ViewId) -> Result<()> {
         Self::teardown_image_viewport(self, view_id)
     }
 
-    fn render_modal(&mut self, modal: &mut dyn Modal, store: &ViewStore) -> Result<()> {
-        Self::render_modal_inner(self, modal, store)
+    fn render_modal(
+        &mut self,
+        modal: &mut dyn Modal,
+        catalog: &ViewCatalog,
+        cache: &RenderCache,
+    ) -> Result<()> {
+        Self::render_modal_inner(self, modal, catalog, cache)
     }
 
-    fn close_modal(&mut self, store: &ViewStore) -> Result<()> {
-        Self::close_modal_inner(self, store)
+    fn close_modal(&mut self, catalog: &ViewCatalog) -> Result<()> {
+        Self::close_modal_inner(self, catalog)
     }
 
     fn clear_image_cache(&mut self) -> Result<()> {
@@ -464,7 +483,6 @@ fn truncate(text: &str, max: usize) -> String {
 mod tests {
     use super::*;
     use crate::ids::RelationshipId;
-    use crate::render::RasterBudget;
     use crate::workspace::{RelationshipMetadata, ViewInfo, WorkspaceModel};
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -517,21 +535,15 @@ mod tests {
             .incoming_relationships_by_element
             .insert(ElementId::new("api"), vec![RelationshipId::new("r3")]);
 
-        let store = ViewStore::new(
-            vec![
-                view_with_elements("current", &["api", "database", "cache", "browser"]),
-                view_with_elements("database", &["database"]),
-            ],
-            RasterBudget {
-                quality: 1.0,
-                ..RasterBudget::default()
-            },
-        )
+        let catalog = ViewCatalog::new(vec![
+            view_with_elements("current", &["api", "database", "cache", "browser"]),
+            view_with_elements("database", &["database"]),
+        ])
         .unwrap()
         .with_model(model);
 
         let counts =
-            pinned_connection_counts(ViewId::first(), Some(&ElementId::new("api")), &store);
+            pinned_connection_counts(ViewId::first(), Some(&ElementId::new("api")), &catalog);
 
         assert_eq!(
             counts,

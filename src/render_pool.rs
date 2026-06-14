@@ -3,11 +3,12 @@
 //! [`RenderScheduler`] is a thin wrapper specialising [`tui_kit::scheduler::Scheduler`]
 //! for the c4tui pipeline: each request carries an SVG path + raster
 //! budget; the worker calls [`render_svg`]; results are merged into a
-//! [`ViewStore`] by view id.
+//! [`RenderCache`] by view id.
 
 use crate::ids::ViewId;
 use crate::render::{render_svg, RasterBudget, RenderedView};
-use crate::view::ViewStore;
+use crate::render_cache::RenderCache;
+use crate::viewport_state::ViewportState;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use tui_kit::events::AppEventSender;
@@ -59,13 +60,14 @@ impl RenderScheduler {
         self.inner.invalidate_all();
     }
 
-    pub fn drain_into(&self, store: &mut ViewStore) -> Vec<ViewId> {
+    pub fn drain_into(&self, cache: &mut RenderCache, viewport: &mut ViewportState) -> Vec<ViewId> {
         let mut updated = Vec::new();
         for completion in self.inner.drain() {
             let view_id = ViewId::new(completion.id as usize);
             match completion.result {
                 Ok(rendered) => {
-                    store.insert_rendered(view_id, rendered);
+                    cache.insert_rendered(view_id, rendered);
+                    viewport.invalidate(view_id);
                     updated.push(view_id);
                 }
                 Err(error) => {

@@ -12,9 +12,11 @@ use crate::nav_items::{NavTarget, ViewNavItem};
 use crate::nav_picker::{
     NavPicker, NavPickerConfig, NavPickerMode, NavRenderArtifact, ThumbnailCellArea,
 };
+use crate::render_cache::RenderCache;
 use crate::render_pool::{RenderPriority, RenderScheduler};
 use crate::state::{AppState, Effect, ModalSpec};
-use crate::view::{diagram_placement_policy, ViewStore};
+use crate::view_catalog::ViewCatalog;
+use crate::viewport_state::{diagram_placement_policy, ViewportState};
 use crate::workspace::{discover_views, export_workspace, load_workspace_model, WorkspaceSource};
 use anyhow::Result;
 use log::{error, info};
@@ -42,7 +44,9 @@ struct DialogSlot {
 }
 
 pub struct App {
-    store: ViewStore,
+    catalog: ViewCatalog,
+    render_cache: RenderCache,
+    viewport: ViewportState,
     state: AppState,
     workspace: WorkspaceSource,
     svg_format: String,
@@ -68,7 +72,7 @@ impl std::fmt::Debug for App {
 
 impl App {
     pub fn new(
-        store: ViewStore,
+        view_parts: (ViewCatalog, RenderCache, ViewportState),
         workspace: WorkspaceSource,
         svg_format: String,
         config: AppConfig,
@@ -76,13 +80,12 @@ impl App {
         log_buffer: SharedLogBuffer,
         clipboard: Box<dyn Clipboard>,
     ) -> Self {
+        let (catalog, render_cache, viewport) = view_parts;
         let keymap = <KeyMap as KeyMapExt>::from_app_config(&config);
         let mut scheduler = RenderScheduler::new(std::num::NonZeroUsize::new(1).unwrap(), sink);
-        scheduler.request_all(
-            store.render_jobs(),
-            RenderPriority::Background,
-            store.budget(),
-        );
+        let render_jobs = render_cache.render_jobs(&catalog);
+        let render_budget = render_cache.budget();
+        scheduler.request_all(render_jobs, RenderPriority::Background, render_budget);
         let focus = FocusManager::new(
             FocusConfig {
                 restore_on_scope_pop: true,
@@ -92,7 +95,9 @@ impl App {
         )
         .expect("root focus scope is well-formed");
         Self {
-            store,
+            catalog,
+            render_cache,
+            viewport,
             state: AppState::default(),
             workspace,
             svg_format,
@@ -124,13 +129,11 @@ impl App {
         self.dialog_slot = None;
     }
 
-    /// Recompute the placement policy from the current config and store it on
-    /// `ViewStore`. Called after `B` / `O` cycles a placement option.
+    /// Recompute the placement policy from the current config and clear any
+    /// placement state derived from the previous policy.
     fn apply_placement_change(&mut self) {
         let policy = diagram_placement_policy(&self.config.placement);
-        // ViewStore exposes a `with_placement_policy` setter on a moved
-        // value; use direct field access via a small helper to avoid moving.
-        self.store.set_placement_policy(policy);
+        self.viewport.set_placement_policy(policy);
     }
 
     /// Toggle the log viewer scope. Closes if already open; opens otherwise.
@@ -176,7 +179,12 @@ impl App {
         terminal: &mut impl TerminalBackend,
         events: AppEventReceiver,
     ) -> Result<()> {
-        terminal.render(&self.frame_with_progress(), &mut self.store)?;
+        terminal.render(
+            &self.frame_with_progress(),
+            &self.catalog,
+            &mut self.render_cache,
+            &mut self.viewport,
+        )?;
         self.request_active_render();
 
         let mut pending_events = VecDeque::new();
@@ -206,7 +214,9 @@ impl App {
         match event {
             AppEvent::Input(input) => self.handle_input_event(input, terminal),
             AppEvent::Scheduler(SchedulerEvent::Complete) => {
-                let updated = self.scheduler.drain_into(&mut self.store);
+                let updated = self
+                    .scheduler
+                    .drain_into(&mut self.render_cache, &mut self.viewport);
                 if !updated.is_empty() {
                     self.redraw_for_mode(terminal)?;
                 }
@@ -217,9 +227,13 @@ impl App {
                 match self.reload_store() {
                     Ok(()) => {
                         let canvas = terminal.canvas_metrics();
-                        let update =
-                            self.state
-                                .apply(Command::ReloadSucceeded, &mut self.store, canvas)?;
+                        let update = self.state.apply(
+                            Command::ReloadSucceeded,
+                            &self.catalog,
+                            &mut self.render_cache,
+                            &mut self.viewport,
+                            canvas,
+                        )?;
                         if update.effect == Some(Effect::ClearImageCache) {
                             terminal.clear_image_cache()?;
                         }
@@ -227,8 +241,13 @@ impl App {
                     Err(error) => {
                         error!("auto-reload failed: {error:#}");
                         let canvas = terminal.canvas_metrics();
-                        self.state
-                            .apply(Command::ReloadFailed, &mut self.store, canvas)?;
+                        self.state.apply(
+                            Command::ReloadFailed,
+                            &self.catalog,
+                            &mut self.render_cache,
+                            &mut self.viewport,
+                            canvas,
+                        )?;
                         terminal.show_error("Auto-reload failed", &format!("{error:#}"))?;
                         self.enter_dialog(true);
                         return Ok(());
@@ -343,18 +362,22 @@ impl App {
             Step::Idle => Ok(()),
             Step::NavContinue { hover } => {
                 if let Some(hover) = hover {
-                    if !self.store.has_rendered(hover) {
-                        let path = self.store.view(hover).svg_path.clone();
+                    if !self.render_cache.has_rendered(hover) {
+                        let path = self.catalog.view(hover).svg_path.clone();
                         self.scheduler.request(
                             hover,
                             RenderPriority::Hover,
                             path,
-                            self.store.budget(),
+                            self.render_cache.budget(),
                         );
                     }
                 }
                 if let Some(active) = self.active_modal.as_mut() {
-                    terminal.render_modal(active.as_modal_mut(), &self.store)?;
+                    terminal.render_modal(
+                        active.as_modal_mut(),
+                        &self.catalog,
+                        &self.render_cache,
+                    )?;
                 }
                 Ok(())
             }
@@ -366,32 +389,57 @@ impl App {
                 let ActiveModal::Nav { on_select, .. } = modal else {
                     unreachable!("Step::NavSelect implies Nav variant")
                 };
-                terminal.close_modal(&self.store)?;
+                terminal.close_modal(&self.catalog)?;
                 self.focus.pop_scope();
                 let canvas = terminal.canvas_metrics();
                 if let Some(command) = on_select(target, &mut self.state) {
-                    self.state.apply(command, &mut self.store, canvas)?;
+                    self.state.apply(
+                        command,
+                        &self.catalog,
+                        &mut self.render_cache,
+                        &mut self.viewport,
+                        canvas,
+                    )?;
                 }
                 self.request_active_render();
-                terminal.render(&self.frame_with_progress(), &mut self.store)?;
+                terminal.render(
+                    &self.frame_with_progress(),
+                    &self.catalog,
+                    &mut self.render_cache,
+                    &mut self.viewport,
+                )?;
                 Ok(())
             }
             Step::NavCancel => {
                 self.active_modal = None;
-                terminal.close_modal(&self.store)?;
+                terminal.close_modal(&self.catalog)?;
                 self.focus.pop_scope();
-                terminal.render(&self.frame_with_progress(), &mut self.store)?;
+                terminal.render(
+                    &self.frame_with_progress(),
+                    &self.catalog,
+                    &mut self.render_cache,
+                    &mut self.viewport,
+                )?;
                 Ok(())
             }
             Step::LogContinue => {
                 if let Some(active) = self.active_modal.as_mut() {
-                    terminal.render_modal(active.as_modal_mut(), &self.store)?;
+                    terminal.render_modal(
+                        active.as_modal_mut(),
+                        &self.catalog,
+                        &self.render_cache,
+                    )?;
                 }
                 Ok(())
             }
             Step::LogClose => {
                 self.return_to_root();
-                terminal.render(&self.frame_with_progress(), &mut self.store)?;
+                terminal.render(
+                    &self.frame_with_progress(),
+                    &self.catalog,
+                    &mut self.render_cache,
+                    &mut self.viewport,
+                )?;
                 Ok(())
             }
         }
@@ -402,12 +450,21 @@ impl App {
         match self.active_scope() {
             SCOPE_PICKER | SCOPE_LINK_DIRECTORY | SCOPE_LOG => {
                 if let Some(active) = self.active_modal.as_mut() {
-                    terminal.render_modal(active.as_modal_mut(), &self.store)?;
+                    terminal.render_modal(
+                        active.as_modal_mut(),
+                        &self.catalog,
+                        &self.render_cache,
+                    )?;
                 }
                 Ok(())
             }
             SCOPE_DIALOG => Ok(()),
-            _ => terminal.render(&frame, &mut self.store),
+            _ => terminal.render(
+                &frame,
+                &self.catalog,
+                &mut self.render_cache,
+                &mut self.viewport,
+            ),
         }
     }
 
@@ -424,27 +481,48 @@ impl App {
                 self.config.placement.scale_basis = self.config.placement.scale_basis.cycle_next();
                 self.apply_placement_change();
                 self.request_active_render();
-                terminal.render(&self.frame_with_progress(), &mut self.store)?;
+                terminal.render(
+                    &self.frame_with_progress(),
+                    &self.catalog,
+                    &mut self.render_cache,
+                    &mut self.viewport,
+                )?;
                 return Ok(());
             }
             Command::CycleOverflow => {
                 self.config.placement.overflow = self.config.placement.overflow.cycle_next();
                 self.apply_placement_change();
                 self.request_active_render();
-                terminal.render(&self.frame_with_progress(), &mut self.store)?;
+                terminal.render(
+                    &self.frame_with_progress(),
+                    &self.catalog,
+                    &mut self.render_cache,
+                    &mut self.viewport,
+                )?;
                 return Ok(());
             }
             Command::CycleZoomStep => {
                 self.config.zoom = self.config.zoom.cycle_next();
                 self.keymap = <KeyMap as KeyMapExt>::from_app_config(&self.config);
                 self.request_active_render();
-                terminal.render(&self.frame_with_progress(), &mut self.store)?;
+                terminal.render(
+                    &self.frame_with_progress(),
+                    &self.catalog,
+                    &mut self.render_cache,
+                    &mut self.viewport,
+                )?;
                 return Ok(());
             }
             _ => {}
         }
 
-        let update = self.state.apply(command, &mut self.store, canvas)?;
+        let update = self.state.apply(
+            command,
+            &self.catalog,
+            &mut self.render_cache,
+            &mut self.viewport,
+            canvas,
+        )?;
         self.request_active_render();
 
         match update.effect {
@@ -455,7 +533,7 @@ impl App {
                 ModalSpec::View => {
                     let current = self.state.current();
                     terminal.teardown_image_viewport(current)?;
-                    let items = ViewNavItem::collect_all(&self.store.views, &self.store.model);
+                    let items = ViewNavItem::collect_all(&self.catalog.views, &self.catalog.model);
                     let initial = items
                         .iter()
                         .position(|item| item.view_id == current)
@@ -482,13 +560,13 @@ impl App {
                         .selected()
                         .map(|item| item.view_id)
                         .unwrap_or(current);
-                    if !self.store.has_rendered(initial_hover) {
-                        let path = self.store.view(initial_hover).svg_path.clone();
+                    if !self.render_cache.has_rendered(initial_hover) {
+                        let path = self.catalog.view(initial_hover).svg_path.clone();
                         self.scheduler.request(
                             initial_hover,
                             RenderPriority::Hover,
                             path,
-                            self.store.budget(),
+                            self.render_cache.budget(),
                         );
                     }
                     self.focus
@@ -512,15 +590,19 @@ impl App {
                         }),
                     });
                     if let Some(active) = self.active_modal.as_mut() {
-                        terminal.render_modal(active.as_modal_mut(), &self.store)?;
+                        terminal.render_modal(
+                            active.as_modal_mut(),
+                            &self.catalog,
+                            &self.render_cache,
+                        )?;
                     }
                 }
                 ModalSpec::ChildView { target_view_ids } => {
                     let current = self.state.current();
                     terminal.teardown_image_viewport(current)?;
                     let items = ViewNavItem::collect_for_view_ids(
-                        &self.store.views,
-                        &self.store.model,
+                        &self.catalog.views,
+                        &self.catalog.model,
                         &target_view_ids,
                     );
                     let initial_view = target_view_ids.first().copied().unwrap_or(current);
@@ -548,13 +630,13 @@ impl App {
                         .selected()
                         .map(|item| item.view_id)
                         .unwrap_or(initial_view);
-                    if !self.store.has_rendered(initial_hover) {
-                        let path = self.store.view(initial_hover).svg_path.clone();
+                    if !self.render_cache.has_rendered(initial_hover) {
+                        let path = self.catalog.view(initial_hover).svg_path.clone();
                         self.scheduler.request(
                             initial_hover,
                             RenderPriority::Hover,
                             path,
-                            self.store.budget(),
+                            self.render_cache.budget(),
                         );
                     }
                     self.focus
@@ -580,14 +662,18 @@ impl App {
                         }),
                     });
                     if let Some(active) = self.active_modal.as_mut() {
-                        terminal.render_modal(active.as_modal_mut(), &self.store)?;
+                        terminal.render_modal(
+                            active.as_modal_mut(),
+                            &self.catalog,
+                            &self.render_cache,
+                        )?;
                     }
                 }
                 ModalSpec::Link => {
                     let current = self.state.current();
                     let pinned_element = self.state.pinned_element().cloned();
                     let items =
-                        collect_link_candidates(&self.store, current, pinned_element.as_ref());
+                        collect_link_candidates(&self.catalog, current, pinned_element.as_ref());
                     terminal.teardown_image_viewport(current)?;
                     let picker_inner = NavPicker::new(
                         NavPickerConfig {
@@ -611,13 +697,13 @@ impl App {
                         .selected()
                         .map(|item| item.target_view)
                         .unwrap_or(current);
-                    if initial_hover != current && !self.store.has_rendered(initial_hover) {
-                        let path = self.store.view(initial_hover).svg_path.clone();
+                    if initial_hover != current && !self.render_cache.has_rendered(initial_hover) {
+                        let path = self.catalog.view(initial_hover).svg_path.clone();
                         self.scheduler.request(
                             initial_hover,
                             RenderPriority::Hover,
                             path,
-                            self.store.budget(),
+                            self.render_cache.budget(),
                         );
                     }
                     self.focus
@@ -641,7 +727,11 @@ impl App {
                         }),
                     });
                     if let Some(active) = self.active_modal.as_mut() {
-                        terminal.render_modal(active.as_modal_mut(), &self.store)?;
+                        terminal.render_modal(
+                            active.as_modal_mut(),
+                            &self.catalog,
+                            &self.render_cache,
+                        )?;
                     }
                 }
             },
@@ -650,27 +740,46 @@ impl App {
                     .show_message("Reloading workspace...", "Re-running Structurizr export.")?;
                 match self.reload_store() {
                     Ok(()) => {
-                        let update =
-                            self.state
-                                .apply(Command::ReloadSucceeded, &mut self.store, canvas)?;
+                        let update = self.state.apply(
+                            Command::ReloadSucceeded,
+                            &self.catalog,
+                            &mut self.render_cache,
+                            &mut self.viewport,
+                            canvas,
+                        )?;
                         if update.effect == Some(Effect::ClearImageCache) {
                             terminal.clear_image_cache()?;
                         }
                     }
                     Err(error) => {
                         error!("reload failed: {error:#}");
-                        self.state
-                            .apply(Command::ReloadFailed, &mut self.store, canvas)?;
+                        self.state.apply(
+                            Command::ReloadFailed,
+                            &self.catalog,
+                            &mut self.render_cache,
+                            &mut self.viewport,
+                            canvas,
+                        )?;
                         terminal.show_error("Reload failed", &format!("{error:#}"))?;
                         self.enter_dialog(true);
                         return Ok(());
                     }
                 }
-                terminal.render(&self.frame_with_progress(), &mut self.store)?;
+                terminal.render(
+                    &self.frame_with_progress(),
+                    &self.catalog,
+                    &mut self.render_cache,
+                    &mut self.viewport,
+                )?;
             }
             Some(Effect::ClearImageCache) => {
                 terminal.clear_image_cache()?;
-                terminal.render(&self.frame_with_progress(), &mut self.store)?;
+                terminal.render(
+                    &self.frame_with_progress(),
+                    &self.catalog,
+                    &mut self.render_cache,
+                    &mut self.viewport,
+                )?;
             }
             Some(Effect::ToggleLogView) => {
                 self.toggle_log_view();
@@ -681,7 +790,12 @@ impl App {
                 self.enter_dialog(true);
             }
             None if update.render => {
-                terminal.render(&self.frame_with_progress(), &mut self.store)?;
+                terminal.render(
+                    &self.frame_with_progress(),
+                    &self.catalog,
+                    &mut self.render_cache,
+                    &mut self.viewport,
+                )?;
             }
             None => {}
         }
@@ -700,10 +814,14 @@ impl App {
 
     fn request_active_render(&mut self) {
         let view_id = self.state.current();
-        if !self.store.has_rendered(view_id) {
-            let path = self.store.view(view_id).svg_path.clone();
-            self.scheduler
-                .request(view_id, RenderPriority::Active, path, self.store.budget());
+        if !self.render_cache.has_rendered(view_id) {
+            let path = self.catalog.view(view_id).svg_path.clone();
+            self.scheduler.request(
+                view_id,
+                RenderPriority::Active,
+                path,
+                self.render_cache.budget(),
+            );
         }
     }
 
@@ -712,15 +830,16 @@ impl App {
         let exported = export_workspace(&self.workspace, &self.svg_format)?;
         let views = discover_views(&exported)?;
         let model = load_workspace_model(&exported);
-        self.store = ViewStore::new(views, self.config.raster_budget)?
+        self.catalog = ViewCatalog::new(views)?
             .with_model(model)
             .with_export(exported);
+        self.render_cache = RenderCache::new(self.config.raster_budget);
+        self.viewport = ViewportState::new(diagram_placement_policy(&self.config.placement));
         self.scheduler.invalidate_all();
-        self.scheduler.request_all(
-            self.store.render_jobs(),
-            RenderPriority::Background,
-            self.store.budget(),
-        );
+        let render_jobs = self.render_cache.render_jobs(&self.catalog);
+        let render_budget = self.render_cache.budget();
+        self.scheduler
+            .request_all(render_jobs, RenderPriority::Background, render_budget);
         Ok(())
     }
 }
@@ -826,7 +945,11 @@ mod tests {
         let clipboard: Box<dyn crate::clipboard::Clipboard> =
             Box::new(crate::clipboard::DefaultClipboard);
         App::new(
-            ViewStore::new(views, budget()).unwrap(),
+            (
+                ViewCatalog::new(views).unwrap(),
+                RenderCache::new(budget()),
+                ViewportState::default(),
+            ),
             WorkspaceSource {
                 path: PathBuf::from("workspace.dsl"),
             },
@@ -916,7 +1039,11 @@ mod tests {
         let clipboard: Box<dyn crate::clipboard::Clipboard> =
             Box::new(crate::clipboard::DefaultClipboard);
         App::new(
-            ViewStore::new(views, budget()).unwrap().with_model(model),
+            (
+                ViewCatalog::new(views).unwrap().with_model(model),
+                RenderCache::new(budget()),
+                ViewportState::default(),
+            ),
             WorkspaceSource {
                 path: PathBuf::from("workspace.dsl"),
             },
@@ -987,7 +1114,11 @@ mod tests {
         let clipboard: Box<dyn crate::clipboard::Clipboard> =
             Box::new(crate::clipboard::DefaultClipboard);
         App::new(
-            ViewStore::new(views, budget()).unwrap(),
+            (
+                ViewCatalog::new(views).unwrap(),
+                RenderCache::new(budget()),
+                ViewportState::default(),
+            ),
             WorkspaceSource {
                 path: PathBuf::from("workspace.dsl"),
             },
@@ -1221,9 +1352,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (tx, _rx) = mpsc::channel();
         let mut app = test_app_with_connection_svgs(dir.path(), tx);
-        app.store.model.relationships.clear();
-        app.store.model.outgoing_relationships_by_element.clear();
-        app.store.model.incoming_relationships_by_element.clear();
+        app.catalog.model.relationships.clear();
+        app.catalog.model.outgoing_relationships_by_element.clear();
+        app.catalog.model.incoming_relationships_by_element.clear();
         let mut terminal = FakeTerminalBackend::new();
 
         run_with_keys(
@@ -1283,8 +1414,8 @@ mod tests {
                 KeyEvent::Char('q'),
             ],
         );
-        assert!(app.store.transform(ViewId::first()).scale > 1.0);
-        assert!(app.store.transform(ViewId::first()).center_x > 0.5);
+        assert!(app.viewport.transform(ViewId::first()).scale > 1.0);
+        assert!(app.viewport.transform(ViewId::first()).center_x > 0.5);
     }
 
     #[test]

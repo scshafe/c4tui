@@ -1,7 +1,9 @@
 use crate::event::{Command, ZoomAnchor};
 use crate::ids::{ElementId, ViewId};
 use crate::link_directory::LinkCandidate;
-use crate::view::ViewStore;
+use crate::render_cache::RenderCache;
+use crate::view_catalog::ViewCatalog;
+use crate::viewport_state::ViewportState;
 use anyhow::Result;
 use tui_kit::layout::{CanvasMetrics, ViewTransform};
 
@@ -45,7 +47,9 @@ impl AppState {
     pub fn apply(
         &mut self,
         command: Command,
-        store: &mut ViewStore,
+        catalog: &ViewCatalog,
+        cache: &mut RenderCache,
+        viewport: &mut ViewportState,
         canvas: CanvasMetrics,
     ) -> Result<UpdateResult> {
         let mut result = UpdateResult {
@@ -106,16 +110,11 @@ impl AppState {
                 }
             }
             Command::ShowLegend => {
-                let Some(legend_key) = store.view(self.current).key_view_key.clone() else {
+                let Some(legend_key) = catalog.view(self.current).key_view_key.clone() else {
                     result.render = false;
                     return Ok(result);
                 };
-                let Some(target) = store
-                    .views
-                    .iter()
-                    .position(|v| v.key == legend_key)
-                    .map(ViewId::new)
-                else {
+                let Some(target) = catalog.view_id_by_key(&legend_key) else {
                     result.render = false;
                     return Ok(result);
                 };
@@ -125,10 +124,15 @@ impl AppState {
                 self.pinned_element = None;
             }
             Command::DrillAt { canvas_x, canvas_y } => {
-                if let Some(element) =
-                    store.element_at_canvas_point(self.current, canvas_x, canvas_y, canvas)?
-                {
-                    match store
+                if let Some(element) = viewport.element_at_canvas_point(
+                    cache,
+                    catalog,
+                    self.current,
+                    canvas_x,
+                    canvas_y,
+                    canvas,
+                )? {
+                    match catalog
                         .child_view_ids_for_element(self.current, &element)
                         .as_slice()
                     {
@@ -150,8 +154,14 @@ impl AppState {
                 }
             }
             Command::InspectAt { canvas_x, canvas_y } => {
-                self.pinned_element =
-                    store.element_at_canvas_point(self.current, canvas_x, canvas_y, canvas)?;
+                self.pinned_element = viewport.element_at_canvas_point(
+                    cache,
+                    catalog,
+                    self.current,
+                    canvas_x,
+                    canvas_y,
+                    canvas,
+                )?;
                 if self.pinned_element.is_none() {
                     result.render = false;
                 }
@@ -165,16 +175,16 @@ impl AppState {
                 }
             }
             Command::Zoom { factor, anchor } => {
-                self.zoom_current(store, factor, anchor, canvas)?;
+                self.zoom_current(catalog, cache, viewport, factor, anchor, canvas)?;
             }
             Command::ResetView => {
-                store.reset_viewport(self.current, canvas)?;
+                viewport.reset_viewport(cache, catalog, self.current, canvas)?;
             }
             Command::Pan {
                 dx_fraction,
                 dy_fraction,
             } => {
-                self.pan_current(store, dx_fraction, dy_fraction, canvas)?;
+                self.pan_current(catalog, cache, viewport, dx_fraction, dy_fraction, canvas)?;
             }
             Command::DragTo {
                 x,
@@ -186,7 +196,7 @@ impl AppState {
                     let canvas_rows = drag_canvas.cells.rows.max(1);
                     let dx = (f32::from(last_x) - f32::from(x)) / f32::from(canvas_cols);
                     let dy = (f32::from(last_y) - f32::from(y)) / f32::from(canvas_rows);
-                    self.pan_current(store, dx, dy, drag_canvas)?;
+                    self.pan_current(catalog, cache, viewport, dx, dy, drag_canvas)?;
                 } else {
                     result.render = false;
                 }
@@ -227,16 +237,18 @@ impl AppState {
 
     fn zoom_current(
         &self,
-        store: &mut ViewStore,
+        catalog: &ViewCatalog,
+        cache: &mut RenderCache,
+        viewport: &mut ViewportState,
         factor: f32,
         _anchor: ZoomAnchor,
         canvas: CanvasMetrics,
     ) -> Result<()> {
-        let before_transform = store.transform(self.current);
-        let before_placement = store.placement(self.current, canvas)?;
-        store.zoom_view(self.current, factor, canvas)?;
-        let after_transform = store.transform(self.current);
-        let after_placement = store.placement(self.current, canvas)?;
+        let before_transform = viewport.transform(self.current);
+        let before_placement = viewport.placement(cache, catalog, self.current, canvas)?;
+        viewport.zoom_view(cache, catalog, self.current, factor, canvas)?;
+        let after_transform = viewport.transform(self.current);
+        let after_placement = viewport.placement(cache, catalog, self.current, canvas)?;
 
         if let Some(reason) = zoom_no_op_reason(
             factor,
@@ -272,12 +284,14 @@ impl AppState {
 
     fn pan_current(
         &self,
-        store: &mut ViewStore,
+        catalog: &ViewCatalog,
+        cache: &mut RenderCache,
+        viewport: &mut ViewportState,
         horizontal: f32,
         vertical: f32,
         canvas: CanvasMetrics,
     ) -> Result<()> {
-        store.pan_view(self.current, horizontal, vertical, canvas)
+        viewport.pan_view(cache, catalog, self.current, horizontal, vertical, canvas)
     }
 }
 
@@ -409,7 +423,7 @@ mod tests {
         }
     }
 
-    fn test_store() -> ViewStore {
+    fn test_parts() -> (ViewCatalog, RenderCache, ViewportState) {
         let dir = std::env::temp_dir().join(format!(
             "c4tui-state-test-{}",
             std::time::SystemTime::now()
@@ -430,8 +444,8 @@ mod tests {
         let mut child_view_keys_by_element_id = HashMap::new();
         child_view_keys_by_element_id.insert(ElementId::new("1"), vec!["child".to_owned()]);
 
-        ViewStore::new(
-            vec![
+        (
+            ViewCatalog::new(vec![
                 ViewInfo {
                     key: "parent".to_owned(),
                     name: "Parent".to_owned(),
@@ -454,13 +468,14 @@ mod tests {
                     primary_view_key: None,
                     key_view_key: None,
                 },
-            ],
-            budget(),
+            ])
+            .unwrap(),
+            RenderCache::new(budget()),
+            ViewportState::default(),
         )
-        .unwrap()
     }
 
-    fn connection_store() -> ViewStore {
+    fn connection_parts() -> (ViewCatalog, RenderCache, ViewportState) {
         let views = vec![
             ViewInfo {
                 key: "api".to_owned(),
@@ -501,12 +516,16 @@ mod tests {
             .relationships
             .insert(relationship.id.clone(), relationship);
 
-        ViewStore::new(views, budget()).unwrap().with_model(model)
+        (
+            ViewCatalog::new(views).unwrap().with_model(model),
+            RenderCache::new(budget()),
+            ViewportState::default(),
+        )
     }
 
     #[test]
     fn select_view_clears_breadcrumbs() {
-        let mut store = test_store();
+        let (catalog, mut cache, mut viewport) = test_parts();
         let mut state = AppState::default();
         state
             .apply(
@@ -514,13 +533,21 @@ mod tests {
                     canvas_x: 0.5,
                     canvas_y: 0.5,
                 },
-                &mut store,
+                &catalog,
+                &mut cache,
+                &mut viewport,
                 canvas(),
             )
             .unwrap();
 
         state
-            .apply(Command::SelectView(ViewId::first()), &mut store, canvas())
+            .apply(
+                Command::SelectView(ViewId::first()),
+                &catalog,
+                &mut cache,
+                &mut viewport,
+                canvas(),
+            )
             .unwrap();
 
         assert_eq!(state.current(), ViewId::first());
@@ -529,7 +556,7 @@ mod tests {
 
     #[test]
     fn drill_and_back_update_navigation_without_tty() {
-        let mut store = test_store();
+        let (catalog, mut cache, mut viewport) = test_parts();
         let mut state = AppState::default();
 
         state
@@ -538,28 +565,38 @@ mod tests {
                     canvas_x: 0.5,
                     canvas_y: 0.5,
                 },
-                &mut store,
+                &catalog,
+                &mut cache,
+                &mut viewport,
                 canvas(),
             )
             .unwrap();
         assert_eq!(state.current(), ViewId::new(1));
         assert_eq!(state.render_frame().breadcrumbs, &[ViewId::first()]);
 
-        state.apply(Command::Back, &mut store, canvas()).unwrap();
+        state
+            .apply(Command::Back, &catalog, &mut cache, &mut viewport, canvas())
+            .unwrap();
         assert_eq!(state.current(), ViewId::first());
         assert!(state.render_frame().breadcrumbs.is_empty());
     }
 
     #[test]
     fn open_link_directory_requests_modal_without_navigating() {
-        let mut store = connection_store();
+        let (catalog, mut cache, mut viewport) = connection_parts();
         let mut state = AppState {
             pinned_element: Some(ElementId::new("api")),
             ..Default::default()
         };
 
         let update = state
-            .apply(Command::OpenLinkDirectory, &mut store, canvas())
+            .apply(
+                Command::OpenLinkDirectory,
+                &catalog,
+                &mut cache,
+                &mut viewport,
+                canvas(),
+            )
             .unwrap();
 
         assert_eq!(update.effect, Some(Effect::OpenModal(ModalSpec::Link)));
@@ -574,7 +611,7 @@ mod tests {
 
     #[test]
     fn select_link_navigates_and_sets_optional_pin() {
-        let mut store = connection_store();
+        let (catalog, mut cache, mut viewport) = connection_parts();
         let mut state = AppState::default();
         let candidate = LinkCandidate {
             kind: LinkKind::ConnectionOutgoing,
@@ -587,7 +624,13 @@ mod tests {
         };
 
         state
-            .apply(Command::SelectLink(candidate), &mut store, canvas())
+            .apply(
+                Command::SelectLink(candidate),
+                &catalog,
+                &mut cache,
+                &mut viewport,
+                canvas(),
+            )
             .unwrap();
 
         assert_eq!(state.current(), ViewId::new(1));
@@ -600,7 +643,7 @@ mod tests {
 
     #[test]
     fn zoom_pan_and_reset_update_transform_without_tty() {
-        let mut store = test_store();
+        let (catalog, mut cache, mut viewport) = test_parts();
         let mut state = AppState::default();
 
         state
@@ -609,11 +652,13 @@ mod tests {
                     factor: 2.0,
                     anchor: ZoomAnchor::Center,
                 },
-                &mut store,
+                &catalog,
+                &mut cache,
+                &mut viewport,
                 canvas(),
             )
             .unwrap();
-        let scale_after_zoom = store.transform(ViewId::first()).scale;
+        let scale_after_zoom = viewport.transform(ViewId::first()).scale;
         assert!((scale_after_zoom - 2.0).abs() < 0.01);
 
         state
@@ -622,21 +667,29 @@ mod tests {
                     dx_fraction: 0.1,
                     dy_fraction: 0.1,
                 },
-                &mut store,
+                &catalog,
+                &mut cache,
+                &mut viewport,
                 canvas(),
             )
             .unwrap();
-        assert!(store.transform(ViewId::first()).center_x > 0.5);
+        assert!(viewport.transform(ViewId::first()).center_x > 0.5);
 
         state
-            .apply(Command::ResetView, &mut store, canvas())
+            .apply(
+                Command::ResetView,
+                &catalog,
+                &mut cache,
+                &mut viewport,
+                canvas(),
+            )
             .unwrap();
-        assert_eq!(store.transform(ViewId::first()), ViewTransform::fit());
+        assert_eq!(viewport.transform(ViewId::first()), ViewTransform::fit());
     }
 
     #[test]
     fn zoom_below_one_keeps_image_visible_below_fit() {
-        let mut store = test_store();
+        let (catalog, mut cache, mut viewport) = test_parts();
         let mut state = AppState::default();
         state
             .apply(
@@ -644,16 +697,18 @@ mod tests {
                     factor: 0.5,
                     anchor: ZoomAnchor::Center,
                 },
-                &mut store,
+                &catalog,
+                &mut cache,
+                &mut viewport,
                 canvas(),
             )
             .unwrap();
-        assert!(store.transform(ViewId::first()).scale < 1.0);
+        assert!(viewport.transform(ViewId::first()).scale < 1.0);
     }
 
     #[test]
     fn reload_success_resets_navigation_and_requests_cache_clear() {
-        let mut store = test_store();
+        let (catalog, mut cache, mut viewport) = test_parts();
         let mut state = AppState::default();
         state
             .apply(
@@ -661,13 +716,21 @@ mod tests {
                     canvas_x: 0.5,
                     canvas_y: 0.5,
                 },
-                &mut store,
+                &catalog,
+                &mut cache,
+                &mut viewport,
                 canvas(),
             )
             .unwrap();
 
         let result = state
-            .apply(Command::ReloadSucceeded, &mut store, canvas())
+            .apply(
+                Command::ReloadSucceeded,
+                &catalog,
+                &mut cache,
+                &mut viewport,
+                canvas(),
+            )
             .unwrap();
 
         assert_eq!(state.current(), ViewId::first());
@@ -677,7 +740,7 @@ mod tests {
 
     #[test]
     fn reload_failure_keeps_current_view() {
-        let mut store = test_store();
+        let (catalog, mut cache, mut viewport) = test_parts();
         let mut state = AppState::default();
         state
             .apply(
@@ -685,13 +748,21 @@ mod tests {
                     canvas_x: 0.5,
                     canvas_y: 0.5,
                 },
-                &mut store,
+                &catalog,
+                &mut cache,
+                &mut viewport,
                 canvas(),
             )
             .unwrap();
 
         state
-            .apply(Command::ReloadFailed, &mut store, canvas())
+            .apply(
+                Command::ReloadFailed,
+                &catalog,
+                &mut cache,
+                &mut viewport,
+                canvas(),
+            )
             .unwrap();
 
         assert_eq!(state.current(), ViewId::new(1));
@@ -699,14 +770,24 @@ mod tests {
 
     #[test]
     fn help_and_reload_commands_request_effects_without_tty() {
-        let mut store = test_store();
+        let (catalog, mut cache, mut viewport) = test_parts();
         let mut state = AppState::default();
 
-        let help = state.apply(Command::Help, &mut store, canvas()).unwrap();
+        let help = state
+            .apply(Command::Help, &catalog, &mut cache, &mut viewport, canvas())
+            .unwrap();
         assert_eq!(help.effect, Some(Effect::ShowHelp));
         assert!(!help.render);
 
-        let reload = state.apply(Command::Reload, &mut store, canvas()).unwrap();
+        let reload = state
+            .apply(
+                Command::Reload,
+                &catalog,
+                &mut cache,
+                &mut viewport,
+                canvas(),
+            )
+            .unwrap();
         assert_eq!(reload.effect, Some(Effect::ReloadWorkspace));
         assert!(!reload.render);
     }
