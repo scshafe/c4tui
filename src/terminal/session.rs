@@ -10,7 +10,7 @@ use super::{dialogs, images, modal, root};
 const STATUS_ROWS: u16 = 1;
 const FOOTER_ROWS: u16 = 1;
 
-pub struct TerminalSession {
+pub(crate) struct TerminalSession {
     pub(super) inner: tui_kit::terminal::Terminal,
     pub(super) status_bar: StatusBar,
     pub(super) footer_bar: StatusBar,
@@ -19,7 +19,7 @@ pub struct TerminalSession {
 }
 
 impl TerminalSession {
-    pub fn enter(config: AppConfig) -> Result<Self> {
+    pub(crate) fn enter(config: AppConfig) -> Result<Self> {
         let inner =
             tui_kit::terminal::Terminal::enter_with_config(TerminalConfig::strict_wezterm_kitty())?;
         Ok(Self {
@@ -31,11 +31,11 @@ impl TerminalSession {
         })
     }
 
-    pub fn set_workspace_path(&mut self, path: std::path::PathBuf) {
+    pub(crate) fn set_workspace_path(&mut self, path: std::path::PathBuf) {
         self.workspace_path = Some(path);
     }
 
-    pub fn canvas(&self) -> CanvasMetrics {
+    pub(crate) fn canvas(&self) -> CanvasMetrics {
         let metrics = self.inner.metrics();
         let reserved = STATUS_ROWS + FOOTER_ROWS;
         let cells = CellSize::new(

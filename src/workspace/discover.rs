@@ -10,7 +10,7 @@ use super::export::ExportedWorkspace;
 use super::metadata::{normalize_view_key, ViewMetadata};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ViewKind {
+pub(crate) enum ViewKind {
     SystemLandscape,
     SystemContext,
     Container,
@@ -25,7 +25,7 @@ pub enum ViewKind {
 }
 
 impl ViewKind {
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::SystemLandscape => "SystemLandscape",
             Self::SystemContext => "SystemContext",
@@ -41,7 +41,7 @@ impl ViewKind {
         }
     }
 
-    pub fn parse(label: &str) -> Self {
+    pub(crate) fn parse(label: &str) -> Self {
         match label {
             "SystemLandscape" => Self::SystemLandscape,
             "SystemContext" => Self::SystemContext,
@@ -57,13 +57,13 @@ impl ViewKind {
         }
     }
 
-    pub const fn is_legend(self) -> bool {
+    pub(crate) const fn is_legend(self) -> bool {
         matches!(self, Self::Key)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct ViewInfo {
+pub(crate) struct ViewInfo {
     pub key: String,
     pub name: String,
     pub kind: ViewKind,
@@ -75,7 +75,7 @@ pub struct ViewInfo {
     pub key_view_key: Option<String>,
 }
 
-pub fn discover_views(exported: &ExportedWorkspace) -> Result<Vec<ViewInfo>> {
+pub(crate) fn discover_views(exported: &ExportedWorkspace) -> Result<Vec<ViewInfo>> {
     let mut svg_files = list_svg_files(exported.output_dir())?;
     svg_files.sort();
 

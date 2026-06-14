@@ -5,20 +5,24 @@ use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 
 #[derive(Debug)]
-pub struct RenderCache {
+pub(crate) struct RenderCache {
     rendered: HashMap<ViewId, RenderedView>,
     budget: RasterBudget,
 }
 
 impl RenderCache {
-    pub fn new(budget: RasterBudget) -> Self {
+    pub(crate) fn new(budget: RasterBudget) -> Self {
         Self {
             rendered: HashMap::new(),
             budget,
         }
     }
 
-    pub fn rendered_view(&mut self, catalog: &ViewCatalog, id: ViewId) -> Result<&RenderedView> {
+    pub(crate) fn rendered_view(
+        &mut self,
+        catalog: &ViewCatalog,
+        id: ViewId,
+    ) -> Result<&RenderedView> {
         if !self.rendered.contains_key(&id) {
             let rendered = render_svg(&catalog.view(id).svg_path, self.budget)?;
             self.rendered.insert(id, rendered);
@@ -29,23 +33,23 @@ impl RenderCache {
             .ok_or_else(|| anyhow!("rendered view was not cached after insertion"))
     }
 
-    pub fn cached_rendered_view(&self, id: ViewId) -> Option<&RenderedView> {
+    pub(crate) fn cached_rendered_view(&self, id: ViewId) -> Option<&RenderedView> {
         self.rendered.get(&id)
     }
 
-    pub fn has_rendered(&self, id: ViewId) -> bool {
+    pub(crate) fn has_rendered(&self, id: ViewId) -> bool {
         self.rendered.contains_key(&id)
     }
 
-    pub fn insert_rendered(&mut self, id: ViewId, rendered: RenderedView) {
+    pub(crate) fn insert_rendered(&mut self, id: ViewId, rendered: RenderedView) {
         self.rendered.insert(id, rendered);
     }
 
-    pub fn budget(&self) -> RasterBudget {
+    pub(crate) fn budget(&self) -> RasterBudget {
         self.budget
     }
 
-    pub fn render_jobs(&self, catalog: &ViewCatalog) -> Vec<(ViewId, std::path::PathBuf)> {
+    pub(crate) fn render_jobs(&self, catalog: &ViewCatalog) -> Vec<(ViewId, std::path::PathBuf)> {
         catalog
             .views
             .iter()

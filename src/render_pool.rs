@@ -14,28 +14,28 @@ use std::path::PathBuf;
 use tui_kit::events::AppEventSender;
 use tui_kit::scheduler::{Priority, Scheduler};
 
-pub use tui_kit::scheduler::Priority as RenderPriority;
+pub(crate) use tui_kit::scheduler::Priority as RenderPriority;
 
 #[derive(Debug, Clone)]
-pub struct RenderRequest {
+pub(crate) struct RenderRequest {
     pub svg_path: PathBuf,
     pub budget: RasterBudget,
 }
 
 #[derive(Debug)]
-pub struct RenderScheduler {
+pub(crate) struct RenderScheduler {
     inner: Scheduler<RenderRequest, RenderedView>,
 }
 
 impl RenderScheduler {
-    pub fn new(workers: NonZeroUsize, sink: AppEventSender) -> Self {
+    pub(crate) fn new(workers: NonZeroUsize, sink: AppEventSender) -> Self {
         let inner = Scheduler::new(workers, sink, |req: &RenderRequest| {
             render_svg(&req.svg_path, req.budget)
         });
         Self { inner }
     }
 
-    pub fn request(
+    pub(crate) fn request(
         &mut self,
         view_id: ViewId,
         priority: Priority,
@@ -47,7 +47,7 @@ impl RenderScheduler {
             .request(id, priority, RenderRequest { svg_path, budget });
     }
 
-    pub fn request_all<I>(&mut self, items: I, priority: Priority, budget: RasterBudget)
+    pub(crate) fn request_all<I>(&mut self, items: I, priority: Priority, budget: RasterBudget)
     where
         I: IntoIterator<Item = (ViewId, PathBuf)>,
     {
@@ -56,11 +56,15 @@ impl RenderScheduler {
         }
     }
 
-    pub fn invalidate_all(&mut self) {
+    pub(crate) fn invalidate_all(&mut self) {
         self.inner.invalidate_all();
     }
 
-    pub fn drain_into(&self, cache: &mut RenderCache, viewport: &mut ViewportState) -> Vec<ViewId> {
+    pub(crate) fn drain_into(
+        &self,
+        cache: &mut RenderCache,
+        viewport: &mut ViewportState,
+    ) -> Vec<ViewId> {
         let mut updated = Vec::new();
         for completion in self.inner.drain() {
             let view_id = ViewId::new(completion.id as usize);
@@ -78,7 +82,7 @@ impl RenderScheduler {
         updated
     }
 
-    pub fn progress(&self) -> tui_kit::scheduler::Progress {
+    pub(crate) fn progress(&self) -> tui_kit::scheduler::Progress {
         self.inner.progress()
     }
 }

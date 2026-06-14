@@ -7,4 +7,4 @@ mod session;
 mod status;
 
 pub(crate) use log_view::render_log_view;
-pub use session::TerminalSession;
+pub(crate) use session::TerminalSession;

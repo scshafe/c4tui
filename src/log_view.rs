@@ -12,20 +12,20 @@ use tui_kit::layout::TailViewport;
 
 /// What the viewer wants the app shell to do after a key.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LogViewOutcome {
+pub(crate) enum LogViewOutcome {
     Continue,
     Close,
 }
 
 /// The yank target: just visible lines, or the whole buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum YankRange {
+pub(crate) enum YankRange {
     Visible,
     All,
 }
 
 #[derive(Debug)]
-pub struct LogView {
+pub(crate) struct LogView {
     buffer: SharedLogBuffer,
     /// Number of lines from the bottom we've scrolled up. 0 means stuck to
     /// the tail.
@@ -41,7 +41,7 @@ pub struct LogView {
 }
 
 impl LogView {
-    pub fn new(buffer: SharedLogBuffer) -> Self {
+    pub(crate) fn new(buffer: SharedLogBuffer) -> Self {
         Self {
             buffer,
             scroll_back: 0,
@@ -51,19 +51,19 @@ impl LogView {
         }
     }
 
-    pub fn last_status(&self) -> Option<&str> {
+    pub(crate) fn last_status(&self) -> Option<&str> {
         self.last_status.as_deref()
     }
 
     /// Rendering captures the body height so future scroll/yank decisions
     /// can use it. Called by the terminal layer.
-    pub fn note_body_height(&mut self, height: usize) {
+    pub(crate) fn note_body_height(&mut self, height: usize) {
         self.last_body_height = height.max(1);
     }
 
     /// Snapshot of entries to render in the current viewport.
     /// Returns `(visible_entries, total_entries, scroll_back, can_scroll_up, can_scroll_down)`.
-    pub fn snapshot(&mut self, body_height: usize) -> LogSnapshot {
+    pub(crate) fn snapshot(&mut self, body_height: usize) -> LogSnapshot {
         let body = body_height.max(1);
         let buf = self.buffer.lock().expect("log buffer poisoned");
         let total = buf.len();
@@ -92,7 +92,7 @@ impl LogView {
 
     /// Handle a key press. The clipboard is passed in so the viewer can
     /// implement `y` / `Y` without owning the impl.
-    pub fn handle_key(
+    pub(crate) fn handle_key(
         &mut self,
         key: KeyEvent,
         clipboard: &dyn Clipboard,
@@ -198,7 +198,7 @@ impl LogView {
 }
 
 #[derive(Debug, Clone)]
-pub struct LogSnapshot {
+pub(crate) struct LogSnapshot {
     pub visible: Vec<LogEntry>,
     pub total: usize,
     pub scroll_back: usize,

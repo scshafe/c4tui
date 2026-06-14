@@ -16,7 +16,7 @@ use std::process::{Command, Stdio};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum CopyOutcome {
+pub(crate) enum CopyOutcome {
     /// Content reached the system clipboard.
     Native,
     /// Content was written to a file as a fallback. `description` is a short
@@ -24,7 +24,7 @@ pub enum CopyOutcome {
     Fallback { path: PathBuf, description: String },
 }
 
-pub trait Clipboard: Send + Sync + std::fmt::Debug {
+pub(crate) trait Clipboard: Send + Sync + std::fmt::Debug {
     fn copy_text(&self, text: &str) -> Result<CopyOutcome>;
 }
 
@@ -32,7 +32,7 @@ pub trait Clipboard: Send + Sync + std::fmt::Debug {
 /// platform-native crates implement [`Clipboard`] and get swapped in at app
 /// construction.
 #[derive(Debug, Default)]
-pub struct DefaultClipboard;
+pub(crate) struct DefaultClipboard;
 
 const TEXT_FALLBACK_PATH: &str = "/tmp/c4tui-yank.txt";
 

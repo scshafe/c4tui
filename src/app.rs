@@ -20,7 +20,7 @@ use tui_kit::events::{
 use tui_kit::focus::{FocusConfig, FocusManager, FocusNode};
 use tui_kit::input::InputEvent;
 
-pub struct App {
+pub(crate) struct App {
     catalog: ViewCatalog,
     render_cache: RenderCache,
     viewport: ViewportState,
@@ -48,7 +48,7 @@ impl std::fmt::Debug for App {
 }
 
 impl App {
-    pub fn new(
+    pub(crate) fn new(
         view_parts: (ViewCatalog, RenderCache, ViewportState),
         workspace: WorkspaceSource,
         svg_format: String,
@@ -90,7 +90,7 @@ impl App {
         }
     }
 
-    pub fn run(
+    pub(crate) fn run(
         &mut self,
         terminal: &mut impl TerminalBackend,
         events: AppEventReceiver,

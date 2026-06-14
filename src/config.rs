@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use tui_kit::layout::{ImageOverflowPolicy, ImageScaleBasis};
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct AppConfig {
+pub(crate) struct AppConfig {
     pub raster_budget: RasterBudget,
     pub keys: KeyBindings,
     pub zoom: ZoomConfig,
@@ -33,7 +33,7 @@ impl Default for AppConfig {
 /// by that ratio). Defaults are reciprocals (1.25 / 0.8) so that one in + one
 /// out returns roughly to the starting scale.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ZoomConfig {
+pub(crate) struct ZoomConfig {
     pub in_factor: f32,
     pub out_factor: f32,
 }
@@ -50,7 +50,7 @@ impl Default for ZoomConfig {
 /// Placement-policy choices c4tui surfaces as runtime config. These map onto
 /// the underlying [`tui_kit::layout::PlacementPolicy`] variants.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PlacementChoiceConfig {
+pub(crate) struct PlacementChoiceConfig {
     pub scale_basis: ScaleBasisChoice,
     pub overflow: OverflowChoice,
 }
@@ -71,7 +71,7 @@ impl Default for PlacementChoiceConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ScaleBasisChoice {
+pub(crate) enum ScaleBasisChoice {
     /// At zoom=1.0 the image is fit to the canvas (current default).
     Fit,
     /// At zoom=1.0 the image is rendered at its native pixel size; zoom
@@ -84,7 +84,7 @@ pub enum ScaleBasisChoice {
 }
 
 impl ScaleBasisChoice {
-    pub fn as_policy(self) -> ImageScaleBasis {
+    pub(crate) fn as_policy(self) -> ImageScaleBasis {
         match self {
             Self::Fit => ImageScaleBasis::FitToArea,
             Self::Native => ImageScaleBasis::NativePixels,
@@ -95,7 +95,7 @@ impl ScaleBasisChoice {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum OverflowChoice {
+pub(crate) enum OverflowChoice {
     /// Image is rescaled to always fit canvas; zoom can't grow it beyond fit.
     FitWithin,
     /// Sample-window crop with origin centered. Image always visually fills
@@ -118,7 +118,7 @@ pub enum OverflowChoice {
 }
 
 impl OverflowChoice {
-    pub fn as_policy(self) -> ImageOverflowPolicy {
+    pub(crate) fn as_policy(self) -> ImageOverflowPolicy {
         match self {
             Self::FitWithin => ImageOverflowPolicy::FitWithinArea,
             Self::Crop => ImageOverflowPolicy::CropSourceToArea,
@@ -129,7 +129,7 @@ impl OverflowChoice {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::FitWithin => "fit_within",
             Self::Crop => "crop",
@@ -141,7 +141,7 @@ impl OverflowChoice {
     }
 
     /// Cycle through every variant for the in-app `O` toggle.
-    pub fn cycle_next(self) -> Self {
+    pub(crate) fn cycle_next(self) -> Self {
         match self {
             Self::FitWithin => Self::Crop,
             Self::Crop => Self::Letterbox,
@@ -154,7 +154,7 @@ impl OverflowChoice {
 }
 
 impl ScaleBasisChoice {
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Fit => "fit",
             Self::Native => "native",
@@ -163,7 +163,7 @@ impl ScaleBasisChoice {
     }
 
     /// Cycle through every variant for the in-app `B` toggle.
-    pub fn cycle_next(self) -> Self {
+    pub(crate) fn cycle_next(self) -> Self {
         match self {
             Self::Fit => Self::Native,
             Self::Native => Self::Fill,
@@ -173,7 +173,7 @@ impl ScaleBasisChoice {
 }
 
 impl ZoomConfig {
-    pub const PRESETS: &'static [(f32, f32)] = &[
+    pub(crate) const PRESETS: &'static [(f32, f32)] = &[
         (1.10, 0.909),
         (1.25, 0.800),
         (1.50, 0.667),
@@ -182,7 +182,7 @@ impl ZoomConfig {
     ];
 
     /// Cycle through `PRESETS` for the in-app `Z` toggle.
-    pub fn cycle_next(self) -> Self {
+    pub(crate) fn cycle_next(self) -> Self {
         let idx = Self::PRESETS
             .iter()
             .position(|(in_f, _)| (in_f - self.in_factor).abs() < 0.005)
@@ -197,7 +197,7 @@ impl ZoomConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KeyBindings {
+pub(crate) struct KeyBindings {
     pub quit: char,
     pub open_picker: char,
     pub reload: char,
@@ -262,11 +262,11 @@ struct RawKeyBindings {
     fit: Option<String>,
 }
 
-pub fn default_config_path() -> Option<PathBuf> {
+pub(crate) fn default_config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|dir| dir.join("c4tui").join("config.toml"))
 }
 
-pub fn load_config(path: Option<&Path>) -> Result<AppConfig> {
+pub(crate) fn load_config(path: Option<&Path>) -> Result<AppConfig> {
     let mut config = AppConfig::default();
     let Some(path) = path.map(Path::to_path_buf).or_else(default_config_path) else {
         return Ok(config);

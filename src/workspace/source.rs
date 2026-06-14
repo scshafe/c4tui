@@ -3,11 +3,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Result};
 
 #[derive(Debug)]
-pub struct WorkspaceSource {
+pub(crate) struct WorkspaceSource {
     pub path: PathBuf,
 }
 
-pub fn resolve_workspace(input: &Path) -> Result<WorkspaceSource> {
+pub(crate) fn resolve_workspace(input: &Path) -> Result<WorkspaceSource> {
     let path = if input.is_dir() {
         let dsl = input.join("workspace.dsl");
         let json = input.join("workspace.json");

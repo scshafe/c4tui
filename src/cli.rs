@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about)]
-pub struct Cli {
+pub(crate) struct Cli {
     /// Path to workspace.dsl, workspace.json, or a directory containing one.
     #[arg(long)]
     pub workspace: Option<PathBuf>,

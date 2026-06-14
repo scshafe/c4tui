@@ -8,7 +8,7 @@ use anyhow::Result;
 use tui_kit::layout::{CanvasMetrics, ViewTransform};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AppState {
+pub(crate) struct AppState {
     current: ViewId,
     breadcrumbs: Vec<ViewId>,
     last_drag: Option<(u16, u16)>,
@@ -27,15 +27,15 @@ impl Default for AppState {
 }
 
 impl AppState {
-    pub const fn current(&self) -> ViewId {
+    pub(crate) const fn current(&self) -> ViewId {
         self.current
     }
 
-    pub fn pinned_element(&self) -> Option<&ElementId> {
+    pub(crate) fn pinned_element(&self) -> Option<&ElementId> {
         self.pinned_element.as_ref()
     }
 
-    pub fn render_frame(&self) -> RenderFrame {
+    pub(crate) fn render_frame(&self) -> RenderFrame {
         RenderFrame {
             current: self.current,
             breadcrumbs: self.breadcrumbs.clone(),
@@ -44,7 +44,7 @@ impl AppState {
         }
     }
 
-    pub fn apply(
+    pub(crate) fn apply(
         &mut self,
         command: Command,
         catalog: &ViewCatalog,
@@ -353,7 +353,7 @@ fn zoom_no_op_reason(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RenderFrame {
+pub(crate) struct RenderFrame {
     pub current: ViewId,
     pub breadcrumbs: Vec<ViewId>,
     pub pinned_element: Option<ElementId>,
@@ -361,14 +361,14 @@ pub struct RenderFrame {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct UpdateResult {
+pub(crate) struct UpdateResult {
     pub effect: Option<Effect>,
     pub render: bool,
     pub canvas: CanvasMetrics,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Effect {
+pub(crate) enum Effect {
     Quit,
     OpenModal(ModalSpec),
     ReloadWorkspace,
@@ -382,7 +382,7 @@ pub enum Effect {
 /// stay separate from this enum — they don't share the picker shape and
 /// folding them in would force a fake-payload variant here.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ModalSpec {
+pub(crate) enum ModalSpec {
     View,
     ChildView { target_view_ids: Vec<ViewId> },
     Link,

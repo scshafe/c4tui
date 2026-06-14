@@ -30,7 +30,7 @@ const THUMB_ROWS: u16 = 5;
 /// The spawn-site closure is the only seam that needs to learn about each
 /// variant.
 #[derive(Debug, Clone, PartialEq)]
-pub enum NavTarget {
+pub(crate) enum NavTarget {
     /// A view selected from the top-level view picker (clears breadcrumbs).
     View(ViewId),
     /// A view selected from the child-view picker spawned on multi-child drill
@@ -43,7 +43,7 @@ pub enum NavTarget {
 /// Item that yields `NavTarget::View(...)` when selected from the top-level
 /// view picker.
 #[derive(Debug, Clone)]
-pub struct ViewNavItem {
+pub(crate) struct ViewNavItem {
     pub view_id: ViewId,
     pub kind: ViewKind,
     pub name: String,
@@ -54,7 +54,7 @@ pub struct ViewNavItem {
 impl ViewNavItem {
     /// Build a `ViewNavItem` collection covering every view in `views`, in
     /// the order they appear in the store.
-    pub fn collect_all(views: &[ViewInfo], model: &WorkspaceModel) -> Vec<Self> {
+    pub(crate) fn collect_all(views: &[ViewInfo], model: &WorkspaceModel) -> Vec<Self> {
         views
             .iter()
             .enumerate()
@@ -65,7 +65,7 @@ impl ViewNavItem {
     /// Build a `ViewNavItem` collection restricted to the given view ids,
     /// preserving the order supplied. Items whose id falls outside the
     /// `views` slice are silently skipped.
-    pub fn collect_for_view_ids(
+    pub(crate) fn collect_for_view_ids(
         views: &[ViewInfo],
         model: &WorkspaceModel,
         view_ids: &[ViewId],

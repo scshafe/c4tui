@@ -8,7 +8,7 @@ use tui_kit::layout::CanvasMetrics;
 /// bar from the canvas region. This is the boundary function: tui-kit speaks
 /// cells, c4tui speaks fractions, and the function that crosses the seam
 /// lives here.
-pub fn mouse_to_canvas_fraction(
+pub(crate) fn mouse_to_canvas_fraction(
     mouse: MouseEvent,
     canvas: CanvasMetrics,
     status_rows: u16,
@@ -28,13 +28,13 @@ pub fn mouse_to_canvas_fraction(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ZoomAnchor {
+pub(crate) enum ZoomAnchor {
     Center,
     Canvas { canvas_x: f32, canvas_y: f32 },
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Command {
+pub(crate) enum Command {
     Quit,
     OpenPicker,
     OpenLinkDirectory,

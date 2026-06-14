@@ -10,7 +10,7 @@ use super::json::{
 };
 
 #[derive(Debug, Clone, Default)]
-pub struct WorkspaceModel {
+pub(crate) struct WorkspaceModel {
     pub elements: HashMap<ElementId, ElementMetadata>,
     pub relationships: HashMap<RelationshipId, RelationshipMetadata>,
     pub outgoing_relationships_by_element: HashMap<ElementId, Vec<RelationshipId>>,
@@ -19,14 +19,14 @@ pub struct WorkspaceModel {
 
 impl WorkspaceModel {
     #[cfg(test)]
-    pub fn connection_counts(&self, element_id: &ElementId) -> ConnectionCounts {
+    pub(crate) fn connection_counts(&self, element_id: &ElementId) -> ConnectionCounts {
         ConnectionCounts {
             outgoing: self.outgoing_relationships(element_id).count(),
             incoming: self.incoming_relationships(element_id).count(),
         }
     }
 
-    pub fn outgoing_relationships(
+    pub(crate) fn outgoing_relationships(
         &self,
         element_id: &ElementId,
     ) -> impl Iterator<Item = &RelationshipMetadata> {
@@ -37,7 +37,7 @@ impl WorkspaceModel {
             .filter_map(|relationship_id| self.relationships.get(relationship_id))
     }
 
-    pub fn incoming_relationships(
+    pub(crate) fn incoming_relationships(
         &self,
         element_id: &ElementId,
     ) -> impl Iterator<Item = &RelationshipMetadata> {
@@ -50,7 +50,7 @@ impl WorkspaceModel {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ElementMetadata {
+pub(crate) struct ElementMetadata {
     pub id: ElementId,
     pub name: String,
     pub description: Option<String>,
@@ -60,7 +60,7 @@ pub struct ElementMetadata {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RelationshipMetadata {
+pub(crate) struct RelationshipMetadata {
     pub id: RelationshipId,
     pub source_id: ElementId,
     pub destination_id: ElementId,
@@ -70,19 +70,19 @@ pub struct RelationshipMetadata {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ConnectionCounts {
+pub(crate) struct ConnectionCounts {
     pub outgoing: usize,
     pub incoming: usize,
 }
 
 impl ConnectionCounts {
-    pub const fn total(self) -> usize {
+    pub(crate) const fn total(self) -> usize {
         self.outgoing + self.incoming
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ElementKind {
+pub(crate) enum ElementKind {
     Person,
     SoftwareSystem,
     Container,
@@ -94,7 +94,7 @@ pub enum ElementKind {
 }
 
 impl ElementKind {
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Person => "Person",
             Self::SoftwareSystem => "Software System",
@@ -108,7 +108,7 @@ impl ElementKind {
     }
 }
 
-pub fn load_workspace_model(exported: &ExportedWorkspace) -> WorkspaceModel {
+pub(crate) fn load_workspace_model(exported: &ExportedWorkspace) -> WorkspaceModel {
     let Some(path) = exported.workspace_json() else {
         return WorkspaceModel::default();
     };

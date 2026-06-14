@@ -7,7 +7,7 @@ use tempfile::TempDir;
 use super::source::WorkspaceSource;
 
 #[derive(Debug)]
-pub struct ExportedWorkspace {
+pub(crate) struct ExportedWorkspace {
     _temp_dir: TempDir,
     output_dir: PathBuf,
     workspace_json: Option<PathBuf>,
@@ -38,7 +38,7 @@ impl ExportedWorkspace {
 /// archived 2026-02-01).
 const STRUCTURIZR_BIN: &str = "structurizr";
 
-pub fn export_workspace(
+pub(crate) fn export_workspace(
     workspace: &WorkspaceSource,
     svg_format: &str,
 ) -> Result<ExportedWorkspace> {

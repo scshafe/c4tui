@@ -7,7 +7,7 @@ use tui_kit::tty::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Support {
+pub(crate) enum Support {
     Yes,
     No,
     Unknown,
@@ -24,7 +24,7 @@ impl fmt::Display for Support {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Capabilities {
+pub(crate) struct Capabilities {
     pub kitty_graphics: Support,
     pub pixel_mouse: Support,
     pub truecolor: Support,
@@ -34,7 +34,10 @@ const KITTY_GRAPHICS_QUERY: &[u8] = b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\
 const SGR_PIXEL_MOUSE_QUERY: &[u8] = b"\x1b[?1016h\x1b[?1016$p";
 const SGR_PIXEL_MOUSE_DISABLE: &[u8] = b"\x1b[?1016l";
 
-pub fn detect_capabilities(timeout: Duration, force_probe: bool) -> io::Result<Capabilities> {
+pub(crate) fn detect_capabilities(
+    timeout: Duration,
+    force_probe: bool,
+) -> io::Result<Capabilities> {
     let baseline = env_capabilities();
 
     let probe_possible = stdin_is_terminal() && stdout_is_terminal();

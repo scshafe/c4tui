@@ -2,18 +2,18 @@ use std::borrow::Borrow;
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ViewId(usize);
+pub(crate) struct ViewId(usize);
 
 impl ViewId {
-    pub const fn new(index: usize) -> Self {
+    pub(crate) const fn new(index: usize) -> Self {
         Self(index)
     }
 
-    pub const fn first() -> Self {
+    pub(crate) const fn first() -> Self {
         Self(0)
     }
 
-    pub const fn index(self) -> usize {
+    pub(crate) const fn index(self) -> usize {
         self.0
     }
 }
@@ -31,14 +31,14 @@ impl fmt::Display for ViewId {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ElementId(String);
+pub(crate) struct ElementId(String);
 
 impl ElementId {
-    pub fn new(value: impl Into<String>) -> Self {
+    pub(crate) fn new(value: impl Into<String>) -> Self {
         Self(value.into())
     }
 
-    pub fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
 }
@@ -68,14 +68,14 @@ impl Borrow<str> for ElementId {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct RelationshipId(String);
+pub(crate) struct RelationshipId(String);
 
 impl RelationshipId {
-    pub fn new(value: impl Into<String>) -> Self {
+    pub(crate) fn new(value: impl Into<String>) -> Self {
         Self(value.into())
     }
 
-    pub fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
 }

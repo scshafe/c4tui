@@ -13,18 +13,18 @@ use tui_kit::widgets::image_viewport::{
 };
 
 #[derive(Debug)]
-pub struct ViewportState {
+pub(crate) struct ViewportState {
     transforms: HashMap<ViewId, ViewTransform>,
     engine: PlacementEngine,
 }
 
-pub struct ViewportRenderParts<'a> {
+pub(crate) struct ViewportRenderParts<'a> {
     pub png: &'a [u8],
     pub widget: ImageViewportWidget,
 }
 
 impl ViewportState {
-    pub fn new(placement_policy: PlacementPolicy) -> Self {
+    pub(crate) fn new(placement_policy: PlacementPolicy) -> Self {
         Self {
             transforms: HashMap::new(),
             engine: PlacementEngine::new(placement_policy.clone())
@@ -32,21 +32,21 @@ impl ViewportState {
         }
     }
 
-    pub fn set_placement_policy(&mut self, policy: PlacementPolicy) {
+    pub(crate) fn set_placement_policy(&mut self, policy: PlacementPolicy) {
         self.engine =
             PlacementEngine::new(policy.clone()).expect("c4tui placement policy is valid");
         self.transforms.clear();
     }
 
-    pub fn invalidate(&mut self, id: ViewId) {
+    pub(crate) fn invalidate(&mut self, id: ViewId) {
         self.transforms.remove(&id);
     }
 
-    pub fn transform(&self, id: ViewId) -> ViewTransform {
+    pub(crate) fn transform(&self, id: ViewId) -> ViewTransform {
         self.transforms.get(&id).copied().unwrap_or_default()
     }
 
-    pub fn placement(
+    pub(crate) fn placement(
         &mut self,
         cache: &mut RenderCache,
         catalog: &ViewCatalog,
@@ -57,7 +57,7 @@ impl ViewportState {
         Ok(self.engine.place(image, canvas, self.transform(id)))
     }
 
-    pub fn viewport_render_parts<'a>(
+    pub(crate) fn viewport_render_parts<'a>(
         &'a mut self,
         cache: &'a mut RenderCache,
         catalog: &ViewCatalog,
@@ -76,7 +76,7 @@ impl ViewportState {
         Ok(ViewportRenderParts { png, widget })
     }
 
-    pub fn reset_viewport(
+    pub(crate) fn reset_viewport(
         &mut self,
         cache: &mut RenderCache,
         catalog: &ViewCatalog,
@@ -88,7 +88,7 @@ impl ViewportState {
         Ok(())
     }
 
-    pub fn zoom_view(
+    pub(crate) fn zoom_view(
         &mut self,
         cache: &mut RenderCache,
         catalog: &ViewCatalog,
@@ -107,7 +107,7 @@ impl ViewportState {
         Ok(())
     }
 
-    pub fn pan_view(
+    pub(crate) fn pan_view(
         &mut self,
         cache: &mut RenderCache,
         catalog: &ViewCatalog,
@@ -124,7 +124,7 @@ impl ViewportState {
         Ok(())
     }
 
-    pub fn element_at_canvas_point(
+    pub(crate) fn element_at_canvas_point(
         &mut self,
         cache: &mut RenderCache,
         catalog: &ViewCatalog,
@@ -172,7 +172,7 @@ impl ViewportState {
     }
 
     #[cfg(test)]
-    pub fn child_view_at_canvas_point(
+    pub(crate) fn child_view_at_canvas_point(
         &mut self,
         cache: &mut RenderCache,
         catalog: &ViewCatalog,
@@ -188,7 +188,7 @@ impl ViewportState {
     }
 
     #[cfg(test)]
-    pub fn child_views_at_canvas_point(
+    pub(crate) fn child_views_at_canvas_point(
         &mut self,
         cache: &mut RenderCache,
         catalog: &ViewCatalog,
@@ -244,7 +244,7 @@ fn widget_from_canonical_placement(
     Ok(widget)
 }
 
-pub fn diagram_placement_policy(choice: &PlacementChoiceConfig) -> PlacementPolicy {
+pub(crate) fn diagram_placement_policy(choice: &PlacementChoiceConfig) -> PlacementPolicy {
     PlacementPolicy {
         scale_basis: choice.scale_basis.as_policy(),
         zoom_limit: ImageZoomLimitPolicy::ClampScale {

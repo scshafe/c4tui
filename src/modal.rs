@@ -40,7 +40,7 @@ use crate::state::AppState;
 /// the modal wants painted *after* its render
 /// (`post_render_thumbnails`). The terminal layer drives these in order
 /// from `render_modal`.
-pub trait Modal {
+pub(crate) trait Modal {
     fn render(&mut self, area: Rect, buffer: &mut Buffer) -> Result<()>;
 
     /// Image-pipeline placement-ids to clear before this modal renders.
@@ -71,7 +71,7 @@ pub trait Modal {
 /// `NavOutcome<T::Output>` into the union `NavTarget` at the trait
 /// boundary, so the holding code (`ActiveModal::Nav(...)`) sees one
 /// concrete outcome type.
-pub trait NavModal: Modal {
+pub(crate) trait NavModal: Modal {
     fn handle_key(&mut self, key: KeyEvent) -> NavModalOutcome;
 
     /// Hover hook used by the view-picker thumbnail prefetch. Returns the
@@ -83,19 +83,19 @@ pub trait NavModal: Modal {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum NavModalOutcome {
+pub(crate) enum NavModalOutcome {
     Continue,
     Select(NavTarget),
     Cancel,
 }
 
 /// `LogView`'s key handling needs a clipboard, so it gets its own trait.
-pub trait LogModal: Modal {
+pub(crate) trait LogModal: Modal {
     fn handle_key(&mut self, key: KeyEvent, clipboard: &dyn Clipboard) -> Result<LogModalOutcome>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LogModalOutcome {
+pub(crate) enum LogModalOutcome {
     Continue,
     Close,
 }
@@ -139,28 +139,28 @@ impl LogModal for LogView {
 
 /// Closure that converts a NavPicker selection of type `O` into the
 /// union `NavTarget`. One per spawn-site.
-pub type IntoNavTarget<O> = Box<dyn Fn(O) -> NavTarget + Send>;
+pub(crate) type IntoNavTarget<O> = Box<dyn Fn(O) -> NavTarget + Send>;
 
 /// Closure that asks a NavPicker which view it's currently hovering, if
 /// any. The view-picker spawn-site returns `Some(view_id)`; other
 /// spawn-sites return `None`.
-pub type HoveredViewFn<T> = Box<dyn Fn(&NavPicker<T>) -> Option<ViewId> + Send>;
+pub(crate) type HoveredViewFn<T> = Box<dyn Fn(&NavPicker<T>) -> Option<ViewId> + Send>;
 
 /// Closure that collects the thumbnail anchors a NavPicker wants the
 /// terminal layer to paint after rendering. Empty for non-thumbnail
 /// pickers.
-pub type ThumbnailFn<T> = Box<dyn Fn(&NavPicker<T>) -> Vec<ThumbnailCellArea> + Send>;
+pub(crate) type ThumbnailFn<T> = Box<dyn Fn(&NavPicker<T>) -> Vec<ThumbnailCellArea> + Send>;
 
 /// Closure invoked when a NavPicker selection lands. Has access to
 /// `AppState` for context-sensitive routing; returns the `Command` the
 /// shell should dispatch, or `None` if the selection was no-op.
-pub type NavOnSelect =
+pub(crate) type NavOnSelect =
     Box<dyn FnOnce(NavTarget, &mut AppState) -> Option<crate::event::Command> + Send>;
 
 /// Concrete `NavModal`: one per spawn-site flavor. The closure inside
 /// converts the typed `T::Output` into the appropriate `NavTarget`
 /// variant.
-pub struct NavPickerModal<T: NavItem> {
+pub(crate) struct NavPickerModal<T: NavItem> {
     pub picker: Cached<NavPicker<T>>,
     pub into_target: IntoNavTarget<T::Output>,
     pub hovered_view: HoveredViewFn<T>,
@@ -212,7 +212,7 @@ impl<T: NavItem> NavModal for NavPickerModal<T> {
 /// Top-level slot owned by `App`. The dialog stays as a separate App
 /// field; its lifecycle does not share the per-frame redraw loop these
 /// two flavors do.
-pub enum ActiveModal {
+pub(crate) enum ActiveModal {
     Nav {
         modal: Box<dyn NavModal + Send>,
         on_select: NavOnSelect,
@@ -225,7 +225,7 @@ pub enum ActiveModal {
 impl ActiveModal {
     /// Widen the active variant to `&mut dyn Modal` so the terminal layer
     /// can render through one method (`render_modal`).
-    pub fn as_modal_mut(&mut self) -> &mut dyn Modal {
+    pub(crate) fn as_modal_mut(&mut self) -> &mut dyn Modal {
         match self {
             ActiveModal::Nav { modal, .. } => modal.as_mut(),
             ActiveModal::Log { modal } => modal.as_mut(),

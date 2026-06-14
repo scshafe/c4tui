@@ -5,13 +5,13 @@ use crate::workspace::{
 use anyhow::{bail, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConnectionDirection {
+pub(crate) enum ConnectionDirection {
     Outgoing,
     Incoming,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConnectionNavigationCandidate {
+pub(crate) struct ConnectionNavigationCandidate {
     pub relationship_id: RelationshipId,
     pub direction: ConnectionDirection,
     pub connected_element_id: ElementId,
@@ -19,7 +19,7 @@ pub struct ConnectionNavigationCandidate {
 }
 
 #[derive(Debug)]
-pub struct ViewCatalog {
+pub(crate) struct ViewCatalog {
     pub views: Vec<ViewInfo>,
     pub model: WorkspaceModel,
     export_guard: Option<ExportedWorkspace>,
@@ -33,7 +33,7 @@ fn direction_rank(direction: ConnectionDirection) -> u8 {
 }
 
 impl ViewCatalog {
-    pub fn new(views: Vec<ViewInfo>) -> Result<Self> {
+    pub(crate) fn new(views: Vec<ViewInfo>) -> Result<Self> {
         if views.is_empty() {
             bail!("no exported SVG views were found");
         }
@@ -45,36 +45,36 @@ impl ViewCatalog {
         })
     }
 
-    pub fn with_model(mut self, model: WorkspaceModel) -> Self {
+    pub(crate) fn with_model(mut self, model: WorkspaceModel) -> Self {
         self.model = model;
         self
     }
 
-    pub fn with_export(mut self, export: ExportedWorkspace) -> Self {
+    pub(crate) fn with_export(mut self, export: ExportedWorkspace) -> Self {
         self.export_guard = Some(export);
         self
     }
 
-    pub fn view(&self, id: ViewId) -> &ViewInfo {
+    pub(crate) fn view(&self, id: ViewId) -> &ViewInfo {
         &self.views[id.index()]
     }
 
-    pub fn view_count(&self) -> usize {
+    pub(crate) fn view_count(&self) -> usize {
         self.views.len()
     }
 
-    pub fn view_id_by_key(&self, key: &str) -> Option<ViewId> {
+    pub(crate) fn view_id_by_key(&self, key: &str) -> Option<ViewId> {
         self.views
             .iter()
             .position(|view| view.key == key)
             .map(ViewId::new)
     }
 
-    pub fn element_metadata(&self, id: &ElementId) -> Option<&ElementMetadata> {
+    pub(crate) fn element_metadata(&self, id: &ElementId) -> Option<&ElementMetadata> {
         self.model.elements.get(id)
     }
 
-    pub fn connection_candidates_for_element(
+    pub(crate) fn connection_candidates_for_element(
         &self,
         current: ViewId,
         element_id: &ElementId,
@@ -129,7 +129,7 @@ impl ViewCatalog {
         candidates
     }
 
-    pub fn connection_candidate_counts_for_element(
+    pub(crate) fn connection_candidate_counts_for_element(
         &self,
         current: ViewId,
         element_id: &ElementId,
@@ -167,7 +167,7 @@ impl ViewCatalog {
             .unwrap_or_else(|| element_id.as_str())
     }
 
-    pub fn child_view_ids_for_element(
+    pub(crate) fn child_view_ids_for_element(
         &self,
         current: ViewId,
         element_id: &ElementId,
@@ -182,7 +182,7 @@ impl ViewCatalog {
     }
 }
 
-pub fn image_id_for_view(id: ViewId) -> u32 {
+pub(crate) fn image_id_for_view(id: ViewId) -> u32 {
     (id.index() as u32) + 1
 }
 

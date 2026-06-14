@@ -22,7 +22,7 @@ use tui_kit::widgets::grid::{Grid, GridCellCanvas, GridStyle};
 
 /// What a NavPicker reports up to its spawning code on each key.
 #[derive(Debug, Clone, PartialEq)]
-pub enum NavOutcome<T> {
+pub(crate) enum NavOutcome<T> {
     Continue,
     Select(T),
     Cancel,
@@ -38,7 +38,7 @@ pub enum NavOutcome<T> {
 /// Item types are deliberately concrete c4tui structs (`ViewNavItem`,
 /// `LinkCandidate`). Adding more is one `impl NavItem` block -- no changes
 /// to NavPicker itself.
-pub trait NavItem: Clone {
+pub(crate) trait NavItem: Clone {
     /// What `Enter` produces when this item is selected.
     type Output: Clone;
 
@@ -84,7 +84,7 @@ pub trait NavItem: Clone {
 /// hints).
 #[derive(Debug, Clone)]
 #[non_exhaustive]
-pub enum NavRenderArtifact {
+pub(crate) enum NavRenderArtifact {
     /// A cell area where the spawning code should later place an image
     /// thumbnail (kitty placement). Used by `ViewNavItem` to surface the
     /// thumbnail anchor for the existing thumbnail-rendering path in
@@ -102,7 +102,7 @@ pub enum NavRenderArtifact {
 /// (`terminal::draw_picker`) and the only producer (`NavPicker`) sit in
 /// neighboring modules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ThumbnailCellArea {
+pub(crate) struct ThumbnailCellArea {
     pub view_id: crate::ids::ViewId,
     pub area: CellArea,
 }
@@ -111,17 +111,17 @@ pub struct ThumbnailCellArea {
 /// we use an opaque newtype so a future Phase 5 `LinkCandidate` could grow
 /// one without retouching this trait.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ThumbnailId(crate::ids::ViewId);
+pub(crate) struct ThumbnailId(crate::ids::ViewId);
 
 impl ThumbnailId {
     /// Construct a thumbnail id for a view. Today every thumbnail belongs
     /// to a view; new sources should add their own constructor rather than
     /// exposing the inner field.
-    pub fn view(view_id: crate::ids::ViewId) -> Self {
+    pub(crate) fn view(view_id: crate::ids::ViewId) -> Self {
         Self(view_id)
     }
 
-    pub fn view_id(self) -> crate::ids::ViewId {
+    pub(crate) fn view_id(self) -> crate::ids::ViewId {
         self.0
     }
 }
@@ -136,32 +136,32 @@ impl ThumbnailId {
 /// of the underlying `GridCellCanvas`; `'buf` is the lifetime of the buffer
 /// that canvas writes into. Both come from Grid's render callback and
 /// outlive a single `render_into_canvas` invocation only.
-pub struct NavCellCanvas<'canvas, 'buf> {
+pub(crate) struct NavCellCanvas<'canvas, 'buf> {
     pub(crate) inner: &'canvas mut GridCellCanvas<'buf>,
 }
 
 impl<'canvas, 'buf> NavCellCanvas<'canvas, 'buf> {
-    pub fn new(inner: &'canvas mut GridCellCanvas<'buf>) -> Self {
+    pub(crate) fn new(inner: &'canvas mut GridCellCanvas<'buf>) -> Self {
         Self { inner }
     }
 
-    pub fn width(&self) -> u16 {
+    pub(crate) fn width(&self) -> u16 {
         self.inner.width()
     }
 
-    pub fn height(&self) -> u16 {
+    pub(crate) fn height(&self) -> u16 {
         self.inner.height()
     }
 
-    pub fn style(&self) -> Style {
+    pub(crate) fn style(&self) -> Style {
         self.inner.style()
     }
 
-    pub fn set_string(&mut self, x: u16, y: u16, text: impl AsRef<str>, style: Style) {
+    pub(crate) fn set_string(&mut self, x: u16, y: u16, text: impl AsRef<str>, style: Style) {
         self.inner.set_string(x, y, text, style)
     }
 
-    pub fn local_cell_area(&self, x: u16, y: u16, w: u16, h: u16) -> CellArea {
+    pub(crate) fn local_cell_area(&self, x: u16, y: u16, w: u16, h: u16) -> CellArea {
         self.inner.local_cell_area(x, y, w, h)
     }
 }
@@ -174,7 +174,7 @@ impl<'canvas, 'buf> NavCellCanvas<'canvas, 'buf> {
 /// `Back`, and `Tab` keys -- it is pure arrow-and-Enter navigation over a
 /// fixed list.
 #[derive(Debug, Clone)]
-pub enum NavPickerMode {
+pub(crate) enum NavPickerMode {
     Filterable {
         /// When true, `Tab` toggles `show_secondary`. When false, `Tab` is a
         /// no-op (Filterable pickers never use it as a Down synonym; the
@@ -185,7 +185,7 @@ pub enum NavPickerMode {
 
 /// Configuration for a NavPicker spawned by a c4tui call site.
 #[derive(Debug, Clone)]
-pub struct NavPickerConfig {
+pub(crate) struct NavPickerConfig {
     pub id: ComponentId,
     /// Window title rendered in the block's top border.
     pub title: String,
@@ -202,7 +202,7 @@ pub struct NavPickerConfig {
 }
 
 #[derive(Debug)]
-pub struct NavPicker<T: NavItem> {
+pub(crate) struct NavPicker<T: NavItem> {
     config: NavPickerConfig,
     items: Vec<T>,
     /// Indices into `items` for the currently visible rows. Recomputed by
@@ -218,7 +218,7 @@ pub struct NavPicker<T: NavItem> {
 }
 
 impl<T: NavItem> NavPicker<T> {
-    pub fn new(config: NavPickerConfig, items: Vec<T>, initial_selection: usize) -> Self {
+    pub(crate) fn new(config: NavPickerConfig, items: Vec<T>, initial_selection: usize) -> Self {
         let mut picker = Self {
             config,
             items,
@@ -237,38 +237,38 @@ impl<T: NavItem> NavPicker<T> {
     }
 
     #[cfg(test)]
-    pub fn filter(&self) -> &str {
+    pub(crate) fn filter(&self) -> &str {
         &self.filter
     }
 
     #[cfg(test)]
-    pub fn show_secondary(&self) -> bool {
+    pub(crate) fn show_secondary(&self) -> bool {
         self.show_secondary
     }
 
     #[cfg(test)]
-    pub fn selected_index(&self) -> usize {
+    pub(crate) fn selected_index(&self) -> usize {
         self.selected_index
     }
 
     /// Index into `self.items` (not into the visible-indices cache) of the
     /// currently selected item, or `None` if no items are visible.
-    pub fn selected_index_in_items(&self) -> Option<usize> {
+    pub(crate) fn selected_index_in_items(&self) -> Option<usize> {
         self.visible_indices.get(self.selected_index).copied()
     }
 
     /// Borrow the currently selected item without cloning. `None` when the
     /// visible set is empty (e.g. no items, or filter excludes all).
-    pub fn selected(&self) -> Option<&T> {
+    pub(crate) fn selected(&self) -> Option<&T> {
         self.items.get(self.selected_index_in_items()?)
     }
 
-    pub fn last_artifacts(&self) -> &[NavRenderArtifact] {
+    pub(crate) fn last_artifacts(&self) -> &[NavRenderArtifact] {
         &self.last_artifacts
     }
 
     #[cfg(test)]
-    pub fn visible_len(&self) -> usize {
+    pub(crate) fn visible_len(&self) -> usize {
         self.visible_indices.len()
     }
 
@@ -295,7 +295,7 @@ impl<T: NavItem> NavPicker<T> {
         }
     }
 
-    pub fn handle_key(&mut self, key: KeyEvent) -> NavOutcome<T::Output> {
+    pub(crate) fn handle_key(&mut self, key: KeyEvent) -> NavOutcome<T::Output> {
         let allows_secondary_toggle = matches!(
             self.config.mode,
             NavPickerMode::Filterable {

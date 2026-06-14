@@ -1,3 +1,5 @@
+#![warn(unreachable_pub)]
+
 mod app;
 mod backend;
 mod capabilities;

@@ -8,9 +8,9 @@ use tui_kit::layout::{CanvasMetrics, Placement, ViewTransform};
 // c4tui-internal because StatusContext<'a> has borrowed fields that don't
 // fit tui-kit's `Segment<Ctx>` parameterization (the `Ctx` type can't carry
 // a per-render lifetime when stored in a `Box<dyn Segment<Ctx>>`).
-pub use tui_kit::bar::{SegmentSlot, StatusFragment};
+pub(crate) use tui_kit::bar::{SegmentSlot, StatusFragment};
 
-pub struct StatusContext<'a> {
+pub(crate) struct StatusContext<'a> {
     pub view: &'a ViewInfo,
     pub breadcrumb_names: Vec<&'a str>,
     pub transform: ViewTransform,
@@ -24,23 +24,23 @@ pub struct StatusContext<'a> {
     pub workspace_path: Option<&'a std::path::Path>,
 }
 
-pub trait StatusSegment: std::fmt::Debug {
+pub(crate) trait StatusSegment: std::fmt::Debug {
     fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment>;
 }
 
 #[derive(Debug)]
-pub struct StatusBar {
+pub(crate) struct StatusBar {
     segments: Vec<(SegmentSlot, Box<dyn StatusSegment + Send + Sync>)>,
     separator: &'static str,
     elide: &'static str,
 }
 
 impl StatusBar {
-    pub fn builder() -> StatusBarBuilder {
+    pub(crate) fn builder() -> StatusBarBuilder {
         StatusBarBuilder::default()
     }
 
-    pub fn render(&self, ctx: &StatusContext<'_>, width: u16) -> String {
+    pub(crate) fn render(&self, ctx: &StatusContext<'_>, width: u16) -> String {
         let collect = |slot: SegmentSlot| -> Vec<StatusFragment> {
             self.segments
                 .iter()
@@ -57,12 +57,12 @@ impl StatusBar {
 }
 
 #[derive(Default)]
-pub struct StatusBarBuilder {
+pub(crate) struct StatusBarBuilder {
     segments: Vec<(SegmentSlot, Box<dyn StatusSegment + Send + Sync>)>,
 }
 
 impl StatusBarBuilder {
-    pub fn add(
+    pub(crate) fn add(
         mut self,
         slot: SegmentSlot,
         segment: impl StatusSegment + Send + Sync + 'static,
@@ -71,7 +71,7 @@ impl StatusBarBuilder {
         self
     }
 
-    pub fn build(self) -> StatusBar {
+    pub(crate) fn build(self) -> StatusBar {
         StatusBar {
             segments: self.segments,
             separator: " | ",
@@ -80,11 +80,11 @@ impl StatusBarBuilder {
     }
 }
 
-pub mod segments {
+pub(crate) mod segments {
     use super::*;
 
     #[derive(Debug, Default)]
-    pub struct AppNameSegment;
+    pub(crate) struct AppNameSegment;
 
     impl StatusSegment for AppNameSegment {
         fn render(&self, _ctx: &StatusContext<'_>) -> Option<StatusFragment> {
@@ -100,7 +100,7 @@ pub mod segments {
     }
 
     #[derive(Debug, Default)]
-    pub struct BreadcrumbSegment;
+    pub(crate) struct BreadcrumbSegment;
 
     impl StatusSegment for BreadcrumbSegment {
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
@@ -111,7 +111,7 @@ pub mod segments {
     }
 
     #[derive(Debug, Default)]
-    pub struct DescriptionSegment;
+    pub(crate) struct DescriptionSegment;
 
     impl StatusSegment for DescriptionSegment {
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
@@ -123,7 +123,7 @@ pub mod segments {
     }
 
     #[derive(Debug, Default)]
-    pub struct ViewTypeSegment;
+    pub(crate) struct ViewTypeSegment;
 
     impl StatusSegment for ViewTypeSegment {
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
@@ -132,7 +132,7 @@ pub mod segments {
     }
 
     #[derive(Debug, Default)]
-    pub struct ZoomSegment;
+    pub(crate) struct ZoomSegment;
 
     impl StatusSegment for ZoomSegment {
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
@@ -144,7 +144,7 @@ pub mod segments {
     }
 
     #[derive(Debug, Default)]
-    pub struct HintsSegment;
+    pub(crate) struct HintsSegment;
 
     impl StatusSegment for HintsSegment {
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
@@ -168,7 +168,7 @@ pub mod segments {
     }
 
     #[derive(Debug, Default)]
-    pub struct WorkspacePathSegment;
+    pub(crate) struct WorkspacePathSegment;
 
     impl StatusSegment for WorkspacePathSegment {
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
@@ -183,7 +183,7 @@ pub mod segments {
     }
 
     #[derive(Debug, Default)]
-    pub struct ImageDimensionsSegment;
+    pub(crate) struct ImageDimensionsSegment;
 
     impl StatusSegment for ImageDimensionsSegment {
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
@@ -200,7 +200,7 @@ pub mod segments {
     }
 
     #[derive(Debug, Default)]
-    pub struct ViewportSegment;
+    pub(crate) struct ViewportSegment;
 
     impl StatusSegment for ViewportSegment {
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
@@ -219,7 +219,7 @@ pub mod segments {
     }
 
     #[derive(Debug, Default)]
-    pub struct SourceRectSegment;
+    pub(crate) struct SourceRectSegment;
 
     impl StatusSegment for SourceRectSegment {
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
@@ -232,7 +232,7 @@ pub mod segments {
     }
 
     #[derive(Debug, Default)]
-    pub struct RenderProgressSegment;
+    pub(crate) struct RenderProgressSegment;
 
     impl StatusSegment for RenderProgressSegment {
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
@@ -245,7 +245,7 @@ pub mod segments {
     }
 
     #[derive(Debug, Default)]
-    pub struct PinnedElementSegment;
+    pub(crate) struct PinnedElementSegment;
 
     impl StatusSegment for PinnedElementSegment {
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
@@ -274,7 +274,7 @@ pub mod segments {
     /// zoom step so the user can see what the `B` / `O` / `Z` cycle keys are
     /// affecting.
     #[derive(Debug, Default)]
-    pub struct PlacementSegment;
+    pub(crate) struct PlacementSegment;
 
     impl StatusSegment for PlacementSegment {
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
@@ -291,7 +291,7 @@ pub mod segments {
     }
 
     #[derive(Debug, Default)]
-    pub struct CenterSegment;
+    pub(crate) struct CenterSegment;
 
     impl StatusSegment for CenterSegment {
         fn render(&self, ctx: &StatusContext<'_>) -> Option<StatusFragment> {
@@ -307,7 +307,7 @@ pub mod segments {
     }
 }
 
-pub fn default_status_bar() -> StatusBar {
+pub(crate) fn default_status_bar() -> StatusBar {
     StatusBar::builder()
         .add(SegmentSlot::Left, segments::AppNameSegment)
         .add(SegmentSlot::Left, segments::BreadcrumbSegment)
@@ -321,7 +321,7 @@ pub fn default_status_bar() -> StatusBar {
         .build()
 }
 
-pub fn default_footer_bar() -> StatusBar {
+pub(crate) fn default_footer_bar() -> StatusBar {
     StatusBar::builder()
         .add(SegmentSlot::Left, segments::HintsSegment)
         .add(SegmentSlot::Right, segments::PlacementSegment)

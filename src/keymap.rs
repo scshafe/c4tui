@@ -6,7 +6,7 @@ use tui_kit::layout::CanvasMetrics;
 
 /// c4tui's keymap: a `tui_kit::keymap::KeyMap<Command>` with the
 /// app-defined default bindings and `resolve` for mouse events.
-pub type KeyMap = KitKeyMap<Command>;
+pub(crate) type KeyMap = KitKeyMap<Command>;
 
 /// Number of terminal rows occupied by the status bar at the top of the
 /// canvas. Used by `resolve` when converting mouse-cell coordinates into
@@ -14,7 +14,7 @@ pub type KeyMap = KitKeyMap<Command>;
 /// if/when c4tui makes the status bar configurable, this becomes a field.
 const STATUS_ROWS: u16 = 1;
 
-pub trait KeyMapExt {
+pub(crate) trait KeyMapExt {
     fn defaults_with(keys: &KeyBindings, zoom: ZoomConfig) -> Self;
     fn from_app_config(config: &AppConfig) -> Self;
     fn resolve(&self, event: InputEvent, canvas: CanvasMetrics) -> Command;

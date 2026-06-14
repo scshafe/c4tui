@@ -4,7 +4,7 @@ use crate::view_catalog::{ConnectionDirection, ViewCatalog};
 use ratatui::style::{Modifier, Style};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LinkKind {
+pub(crate) enum LinkKind {
     Detail,
     ConnectionOutgoing,
     ConnectionIncoming,
@@ -12,7 +12,7 @@ pub enum LinkKind {
 }
 
 impl LinkKind {
-    pub const fn label(self) -> &'static str {
+    pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Detail => "detail",
             Self::ConnectionOutgoing => "outgoing",
@@ -32,7 +32,7 @@ impl LinkKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LinkCandidate {
+pub(crate) struct LinkCandidate {
     pub kind: LinkKind,
     pub target_view: ViewId,
     pub source_element: Option<ElementId>,
@@ -108,7 +108,7 @@ impl NavItem for LinkCandidate {
     }
 }
 
-pub fn collect_link_candidates(
+pub(crate) fn collect_link_candidates(
     catalog: &ViewCatalog,
     current: ViewId,
     pinned_element: Option<&ElementId>,

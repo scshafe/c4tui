@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 const DEFAULT_BUFFER_CAPACITY: usize = 1000;
 
 #[derive(Debug, Clone)]
-pub struct LogEntry {
+pub(crate) struct LogEntry {
     pub level: log::Level,
     pub target: String,
     pub message: String,
@@ -27,13 +27,13 @@ pub struct LogEntry {
 impl LogEntry {
     /// Render the entry as the line that should appear in the log viewer or
     /// be copied to the clipboard.
-    pub fn render(&self) -> String {
+    pub(crate) fn render(&self) -> String {
         format!("{:<5} {} — {}", self.level, self.target, self.message)
     }
 }
 
 #[derive(Debug, Default)]
-pub struct LogBuffer {
+pub(crate) struct LogBuffer {
     entries: VecDeque<LogEntry>,
     capacity: usize,
     /// Monotonic counter of entries pushed since process start (including
@@ -43,7 +43,7 @@ pub struct LogBuffer {
 }
 
 impl LogBuffer {
-    pub fn with_capacity(capacity: usize) -> Self {
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
         Self {
             entries: VecDeque::with_capacity(capacity.min(1024)),
             capacity,
@@ -51,7 +51,7 @@ impl LogBuffer {
         }
     }
 
-    pub fn push(&mut self, entry: LogEntry) {
+    pub(crate) fn push(&mut self, entry: LogEntry) {
         if self.entries.len() == self.capacity {
             self.entries.pop_front();
         }
@@ -59,15 +59,15 @@ impl LogBuffer {
         self.total_pushed = self.total_pushed.saturating_add(1);
     }
 
-    pub fn entries(&self) -> &VecDeque<LogEntry> {
+    pub(crate) fn entries(&self) -> &VecDeque<LogEntry> {
         &self.entries
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.entries.len()
     }
 
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.entries.clear();
     }
 
@@ -85,10 +85,10 @@ impl LogBuffer {
     }
 }
 
-pub type SharedLogBuffer = Arc<Mutex<LogBuffer>>;
+pub(crate) type SharedLogBuffer = Arc<Mutex<LogBuffer>>;
 
 #[derive(Debug)]
-pub struct AppLogger {
+pub(crate) struct AppLogger {
     buffer: SharedLogBuffer,
     file: Option<Mutex<File>>,
     filter: env_filter::Filter,
@@ -138,7 +138,7 @@ impl log::Log for AppLogger {
 ///
 /// `RUST_LOG` controls filtering. The default level is `warn` if `RUST_LOG`
 /// is unset.
-pub fn install(log_file: Option<&Path>) -> Result<SharedLogBuffer> {
+pub(crate) fn install(log_file: Option<&Path>) -> Result<SharedLogBuffer> {
     let mut filter_builder = env_filter::Builder::from_env("RUST_LOG");
     if std::env::var("RUST_LOG").is_err() {
         filter_builder.parse("warn");

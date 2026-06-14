@@ -7,7 +7,7 @@ use std::sync::{Arc, OnceLock};
 use tui_kit::layout::PixelSize;
 
 #[derive(Debug)]
-pub struct RenderedView {
+pub(crate) struct RenderedView {
     pub natural_size: PixelSize,
     pub raster_size: PixelSize,
     pub png: Vec<u8>,
@@ -16,7 +16,7 @@ pub struct RenderedView {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ElementBBox {
+pub(crate) struct ElementBBox {
     pub element_id: ElementId,
     pub x: f32,
     pub y: f32,
@@ -25,17 +25,17 @@ pub struct ElementBBox {
 }
 
 impl ElementBBox {
-    pub fn contains(&self, x: f32, y: f32) -> bool {
+    pub(crate) fn contains(&self, x: f32, y: f32) -> bool {
         x >= self.x && y >= self.y && x <= self.x + self.width && y <= self.y + self.height
     }
 
-    pub fn area(&self) -> f32 {
+    pub(crate) fn area(&self) -> f32 {
         self.width * self.height
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Background {
+pub(crate) enum Background {
     Auto,
     Transparent,
     Color(u8, u8, u8, u8),
@@ -52,7 +52,7 @@ impl Background {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RasterBudget {
+pub(crate) struct RasterBudget {
     pub quality: f32,
     pub max_pixels: u64,
     pub min_scale: f32,
@@ -77,7 +77,7 @@ impl Default for RasterBudget {
 }
 
 impl RasterBudget {
-    pub fn scale_for(self, natural: PixelSize) -> f32 {
+    pub(crate) fn scale_for(self, natural: PixelSize) -> f32 {
         if natural.width == 0 || natural.height == 0 {
             return self.quality;
         }
@@ -109,7 +109,7 @@ fn shared_fontdb() -> Arc<fontdb::Database> {
     .clone()
 }
 
-pub fn render_svg(svg_path: &Path, budget: RasterBudget) -> Result<RenderedView> {
+pub(crate) fn render_svg(svg_path: &Path, budget: RasterBudget) -> Result<RenderedView> {
     let svg =
         fs::read(svg_path).with_context(|| format!("failed to read {}", svg_path.display()))?;
     let sampled_bg = sample_root_background(&svg);

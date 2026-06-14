@@ -8,12 +8,12 @@ use crate::viewport_state::ViewportState;
 use anyhow::Result;
 use tui_kit::layout::CanvasMetrics;
 
-pub trait TerminalBackend {
+pub(crate) trait TerminalBackend {
     fn canvas_metrics(&self) -> CanvasMetrics;
     fn execute(&mut self, command: TerminalCommand<'_>) -> Result<()>;
 }
 
-pub enum TerminalCommand<'a> {
+pub(crate) enum TerminalCommand<'a> {
     RenderRoot(RootRenderRequest<'a>),
     RenderModal(ModalRenderRequest<'a>),
     CloseModal(ModalCloseRequest<'a>),
@@ -24,30 +24,30 @@ pub enum TerminalCommand<'a> {
     ShowHelp { keys: &'a KeyBindings },
 }
 
-pub struct RootRenderRequest<'a> {
+pub(crate) struct RootRenderRequest<'a> {
     pub frame: &'a RenderFrame,
     pub catalog: &'a ViewCatalog,
     pub cache: &'a mut RenderCache,
     pub viewport: &'a mut ViewportState,
 }
 
-pub struct ModalRenderRequest<'a> {
+pub(crate) struct ModalRenderRequest<'a> {
     pub modal: &'a mut dyn Modal,
     pub catalog: &'a ViewCatalog,
     pub cache: &'a RenderCache,
 }
 
-pub struct ModalCloseRequest<'a> {
+pub(crate) struct ModalCloseRequest<'a> {
     pub catalog: &'a ViewCatalog,
 }
 
 #[cfg(test)]
-pub mod fake {
+pub(crate) mod fake {
     use super::*;
     use tui_kit::layout::{CellPixel, CellSize};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
-    pub enum FakeTerminalCall {
+    pub(crate) enum FakeTerminalCall {
         Render(ViewId),
         TeardownImageViewport(ViewId),
         RenderModal,
@@ -59,7 +59,7 @@ pub mod fake {
     }
 
     #[derive(Debug)]
-    pub struct FakeTerminalBackend {
+    pub(crate) struct FakeTerminalBackend {
         canvas: CanvasMetrics,
         pub calls: Vec<FakeTerminalCall>,
         pub rendered_frames: Vec<RenderFrame>,
@@ -72,7 +72,7 @@ pub mod fake {
     }
 
     impl FakeTerminalBackend {
-        pub fn new() -> Self {
+        pub(crate) fn new() -> Self {
             Self {
                 canvas: CanvasMetrics::new(CellSize::new(80, 24), CellPixel::new(8, 16)),
                 calls: Vec::new(),
