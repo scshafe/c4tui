@@ -10,32 +10,35 @@ use tui_kit::layout::CanvasMetrics;
 
 pub trait TerminalBackend {
     fn canvas_metrics(&self) -> CanvasMetrics;
-    fn render(
-        &mut self,
-        frame: &RenderFrame,
-        catalog: &ViewCatalog,
-        cache: &mut RenderCache,
-        viewport: &mut ViewportState,
-    ) -> Result<()>;
-    fn teardown_image_viewport(&mut self, view_id: ViewId) -> Result<()>;
-    /// Render a modal onto the screen. The modal's
-    /// `pre_render_placements_to_clear`, `clear_all_placements_pre_render`,
-    /// and `post_render_thumbnails` hooks drive image-pipeline side effects;
-    /// the `store` argument supplies the cached rasters needed to paint
-    /// thumbnail placements.
-    fn render_modal(
-        &mut self,
-        modal: &mut dyn Modal,
-        catalog: &ViewCatalog,
-        cache: &RenderCache,
-    ) -> Result<()>;
-    /// Tear down any picker-placement slots the modal owned. `catalog` is
-    /// used to enumerate per-view placement ids.
-    fn close_modal(&mut self, catalog: &ViewCatalog) -> Result<()>;
-    fn clear_image_cache(&mut self) -> Result<()>;
-    fn show_message(&mut self, title: &str, message: &str) -> Result<()>;
-    fn show_error(&mut self, title: &str, message: &str) -> Result<()>;
-    fn show_help(&mut self, keys: &KeyBindings) -> Result<()>;
+    fn execute(&mut self, command: TerminalCommand<'_>) -> Result<()>;
+}
+
+pub enum TerminalCommand<'a> {
+    RenderRoot(RootRenderRequest<'a>),
+    RenderModal(ModalRenderRequest<'a>),
+    CloseModal(ModalCloseRequest<'a>),
+    TeardownRootViewport { view_id: ViewId },
+    ClearImageCache,
+    ShowMessage { title: &'a str, message: &'a str },
+    ShowError { title: &'a str, message: &'a str },
+    ShowHelp { keys: &'a KeyBindings },
+}
+
+pub struct RootRenderRequest<'a> {
+    pub frame: &'a RenderFrame,
+    pub catalog: &'a ViewCatalog,
+    pub cache: &'a mut RenderCache,
+    pub viewport: &'a mut ViewportState,
+}
+
+pub struct ModalRenderRequest<'a> {
+    pub modal: &'a mut dyn Modal,
+    pub catalog: &'a ViewCatalog,
+    pub cache: &'a RenderCache,
+}
+
+pub struct ModalCloseRequest<'a> {
+    pub catalog: &'a ViewCatalog,
 }
 
 #[cfg(test)]
@@ -89,62 +92,42 @@ pub mod fake {
             self.canvas
         }
 
-        fn render(
-            &mut self,
-            frame: &RenderFrame,
-            _catalog: &ViewCatalog,
-            _cache: &mut RenderCache,
-            _viewport: &mut ViewportState,
-        ) -> Result<()> {
-            self.calls.push(FakeTerminalCall::Render(frame.current));
-            self.rendered_frames.push(frame.clone());
-            Ok(())
-        }
-
-        fn teardown_image_viewport(&mut self, view_id: ViewId) -> Result<()> {
-            self.calls
-                .push(FakeTerminalCall::TeardownImageViewport(view_id));
-            self.viewport_teardowns.push(view_id);
-            Ok(())
-        }
-
-        fn render_modal(
-            &mut self,
-            _modal: &mut dyn Modal,
-            _catalog: &ViewCatalog,
-            _cache: &RenderCache,
-        ) -> Result<()> {
-            self.calls.push(FakeTerminalCall::RenderModal);
-            self.modal_renders += 1;
-            Ok(())
-        }
-
-        fn close_modal(&mut self, _catalog: &ViewCatalog) -> Result<()> {
-            self.calls.push(FakeTerminalCall::CloseModal);
-            Ok(())
-        }
-
-        fn clear_image_cache(&mut self) -> Result<()> {
-            self.calls.push(FakeTerminalCall::ClearImageCache);
-            self.cleared_image_cache += 1;
-            Ok(())
-        }
-
-        fn show_message(&mut self, title: &str, message: &str) -> Result<()> {
-            self.calls.push(FakeTerminalCall::ShowMessage);
-            self.messages.push((title.to_owned(), message.to_owned()));
-            Ok(())
-        }
-
-        fn show_error(&mut self, title: &str, message: &str) -> Result<()> {
-            self.calls.push(FakeTerminalCall::ShowError);
-            self.errors.push((title.to_owned(), message.to_owned()));
-            Ok(())
-        }
-
-        fn show_help(&mut self, _keys: &KeyBindings) -> Result<()> {
-            self.calls.push(FakeTerminalCall::ShowHelp);
-            self.help_count += 1;
+        fn execute(&mut self, command: TerminalCommand<'_>) -> Result<()> {
+            match command {
+                TerminalCommand::RenderRoot(request) => {
+                    self.calls
+                        .push(FakeTerminalCall::Render(request.frame.current));
+                    self.rendered_frames.push(request.frame.clone());
+                }
+                TerminalCommand::TeardownRootViewport { view_id } => {
+                    self.calls
+                        .push(FakeTerminalCall::TeardownImageViewport(view_id));
+                    self.viewport_teardowns.push(view_id);
+                }
+                TerminalCommand::RenderModal(_) => {
+                    self.calls.push(FakeTerminalCall::RenderModal);
+                    self.modal_renders += 1;
+                }
+                TerminalCommand::CloseModal(_) => {
+                    self.calls.push(FakeTerminalCall::CloseModal);
+                }
+                TerminalCommand::ClearImageCache => {
+                    self.calls.push(FakeTerminalCall::ClearImageCache);
+                    self.cleared_image_cache += 1;
+                }
+                TerminalCommand::ShowMessage { title, message } => {
+                    self.calls.push(FakeTerminalCall::ShowMessage);
+                    self.messages.push((title.to_owned(), message.to_owned()));
+                }
+                TerminalCommand::ShowError { title, message } => {
+                    self.calls.push(FakeTerminalCall::ShowError);
+                    self.errors.push((title.to_owned(), message.to_owned()));
+                }
+                TerminalCommand::ShowHelp { .. } => {
+                    self.calls.push(FakeTerminalCall::ShowHelp);
+                    self.help_count += 1;
+                }
+            }
             Ok(())
         }
     }

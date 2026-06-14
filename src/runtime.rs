@@ -1,4 +1,6 @@
-use crate::backend::TerminalBackend;
+use crate::backend::{
+    ModalCloseRequest, ModalRenderRequest, RootRenderRequest, TerminalBackend, TerminalCommand,
+};
 use crate::clipboard::Clipboard;
 use crate::config::AppConfig;
 use crate::event::Command;
@@ -457,19 +459,26 @@ impl<B: TerminalBackend> AppRuntime<'_, B> {
                 RuntimeIntent::RenderModal => self.render_modal()?,
                 RuntimeIntent::CloseModal => self.close_modal()?,
                 RuntimeIntent::TeardownRootViewport(view_id) => {
-                    self.terminal.teardown_image_viewport(view_id)?;
+                    self.terminal
+                        .execute(TerminalCommand::TeardownRootViewport { view_id })?;
                 }
                 RuntimeIntent::ClearImageCache => {
-                    self.terminal.clear_image_cache()?;
+                    self.terminal.execute(TerminalCommand::ClearImageCache)?;
                 }
                 RuntimeIntent::ShowHelp => {
-                    self.terminal.show_help(&self.config.keys)?;
+                    self.terminal.execute(TerminalCommand::ShowHelp {
+                        keys: &self.config.keys,
+                    })?;
                 }
                 RuntimeIntent::ShowMessage { title, message } => {
-                    self.terminal.show_message(title, message)?;
+                    self.terminal
+                        .execute(TerminalCommand::ShowMessage { title, message })?;
                 }
                 RuntimeIntent::ShowError { title, message } => {
-                    self.terminal.show_error(title, &message)?;
+                    self.terminal.execute(TerminalCommand::ShowError {
+                        title,
+                        message: &message,
+                    })?;
                 }
                 RuntimeIntent::EnterDialog { dismissable } => {
                     enter_dialog(self.focus, self.active_modal, self.dialog_slot, dismissable);
@@ -504,20 +513,32 @@ impl<B: TerminalBackend> AppRuntime<'_, B> {
     fn render_root(&mut self) -> Result<()> {
         let frame = self.frame_with_progress();
         self.terminal
-            .render(&frame, self.catalog, self.render_cache, self.viewport)
+            .execute(TerminalCommand::RenderRoot(RootRenderRequest {
+                frame: &frame,
+                catalog: self.catalog,
+                cache: self.render_cache,
+                viewport: self.viewport,
+            }))
     }
 
     fn render_modal(&mut self) -> Result<()> {
         if let Some(active) = self.active_modal.as_mut() {
             self.terminal
-                .render_modal(active.as_modal_mut(), self.catalog, self.render_cache)?;
+                .execute(TerminalCommand::RenderModal(ModalRenderRequest {
+                    modal: active.as_modal_mut(),
+                    catalog: self.catalog,
+                    cache: self.render_cache,
+                }))?;
         }
         Ok(())
     }
 
     fn close_modal(&mut self) -> Result<()> {
         *self.active_modal = None;
-        self.terminal.close_modal(self.catalog)?;
+        self.terminal
+            .execute(TerminalCommand::CloseModal(ModalCloseRequest {
+                catalog: self.catalog,
+            }))?;
         if active_scope(self.focus) != SCOPE_ROOT {
             self.focus.pop_scope();
         }

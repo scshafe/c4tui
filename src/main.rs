@@ -27,6 +27,7 @@ mod workspace;
 
 use anyhow::{bail, Context, Result};
 use app::App;
+use backend::{TerminalBackend, TerminalCommand};
 use capabilities::{detect_capabilities, Support};
 use clap::Parser;
 use cli::Cli;
@@ -95,7 +96,11 @@ fn run() -> Result<()> {
     ) {
         Ok(store) => store,
         Err(error) => {
-            terminal.show_error("Startup failed", &format!("{error:#}"))?;
+            let message = format!("{error:#}");
+            terminal.execute(TerminalCommand::ShowError {
+                title: "Startup failed",
+                message: &message,
+            })?;
             return Err(error);
         }
     };
