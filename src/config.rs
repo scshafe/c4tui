@@ -61,7 +61,7 @@ impl Default for PlacementChoiceConfig {
             scale_basis: ScaleBasisChoice::Fit,
             // Default: magnifier behaviour. The image is logically scaled to
             // `display = image × effective_scale`; the visible region is the
-            // intersection of that theoretical image and the image-box bounds,
+            // intersection of that theoretical image and the viewport bounds,
             // and source pixels are cropped through center_x / center_y as zoom
             // increases.
             overflow: OverflowChoice::Crop,

@@ -4,7 +4,7 @@ Interactive terminal viewer for Structurizr C4 diagrams. It renders workspace vi
 
 ## Status
 
-Pre-alpha moving toward v1. Phases 0-6 are implemented, and the architecture hardening pass is complete: the binary detects terminal capabilities, exports/rasterizes Structurizr SVG views, displays them with Kitty graphics, provides a keyboard view picker with per-view image caching, supports pan/zoom via Kitty source rectangles, keyboard-first link traversal, optional mouse drill, reload, help, config, and file logging. The original delivery plan is archived at [docs/archive/historical-plan-phase-0-6.md](./docs/archive/historical-plan-phase-0-6.md).
+Pre-alpha moving toward v1. Core Phases 0-6 are implemented, and the Phase 7 documentation/retention pass is reflected here: the binary detects terminal capabilities, exports/rasterizes Structurizr SVG views, displays them with Kitty graphics, provides a keyboard view picker with per-view image caching, supports pan/zoom via Kitty source rectangles, keyboard-first link traversal, optional mouse drill, reload, help, config, and file logging. The original delivery plan is archived at [docs/archive/historical-plan-phase-0-6.md](./docs/archive/historical-plan-phase-0-6.md).
 
 ## Install
 
@@ -103,7 +103,7 @@ The `+` / `-` step factors and the diagram placement policy are configurable bot
 
 The footer always shows the current values, formatted as `B:fit O:letterbox Z:×1.25`.
 
-Defaults render the diagram fit to the image-box at zoom 1.0 and use magnifier semantics for higher zooms: the image is logically scaled by the zoom factor, the visible region is the intersection of that theoretical image and the image-box bounds, and source pixels are cropped through the pan center.
+Defaults render the diagram fit to the image viewport at zoom 1.0 and use magnifier semantics for higher zooms: the image is logically scaled by the zoom factor, the visible region is the intersection of that theoretical image and the viewport bounds, and source pixels are cropped through the pan center.
 
 ```toml
 [zoom]
@@ -120,7 +120,7 @@ scale_basis = "fit"
 # What happens when zoom > what the canvas can show. Choices:
 #   "fit_within"          — zoom can't grow past fit
 #   "crop"                — (default) canonical magnifier: image is logically scaled by
-#                           zoom; visible region grows until it hits image-box
+#                           zoom; visible region grows until it hits viewport
 #                           bounds, then source is sample-cropped through the
 #                           pan center
 #   "letterbox"           — visible region is locked to the image's aspect at
@@ -165,6 +165,10 @@ cargo clippy --all-targets --all-features
 Use a real Kitty-compatible terminal only for explicit manual smoke testing.
 Keep that separate from CI and routine development runs so a renderer or
 terminal regression cannot leave WezTerm in a bad state.
+
+Cross-repo testing guidance for c4tui's `FakeTerminalBackend` and tui-kit's
+`testkit` lives in the adjacent tui-kit repository at
+`docs/testing-patterns.md`.
 
 ### Note on the Structurizr CLI
 

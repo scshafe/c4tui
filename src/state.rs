@@ -338,7 +338,7 @@ fn zoom_no_op_reason(
              step so finer increments register); (2) you're in `letterbox` \
              overflow which locks the visible rectangle to the image aspect \
              — press O to cycle to `crop` for canonical magnifier behaviour \
-             where the visible region grows to image-box bounds.",
+             where the visible region grows to viewport bounds.",
         )
     } else if !scale_unchanged && factor < 1.0 {
         Some(

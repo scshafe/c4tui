@@ -2,9 +2,9 @@
 //!
 //! NavPicker is the substrate for c4tui's keyboard navigation surfaces:
 //! the global view picker, the inline child-view picker spawned by
-//! `OpenChildViewPicker`, and the link directory. Item-type specialisation
-//! happens entirely through the [`NavItem`] trait; layout, filter, scroll,
-//! and key handling live here once.
+//! `ModalSpec::ChildView`, and the link directory. Item-type specialisation
+//! happens entirely through the [`NavItem`] trait; layout, filter, scroll, and
+//! key handling live here once.
 //!
 //! This file is introduced by Phase 3 Task 1 Step 1.2 (trait + struct) and
 //! Step 1.3 (TDD coverage of filter / arrow / Tab / Esc / Enter behavior).
