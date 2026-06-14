@@ -236,122 +236,95 @@ fn element_label(catalog: &ViewCatalog, element_id: &ElementId) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::{
-        ElementKind, ElementMetadata, RelationshipMetadata, ViewInfo, ViewKind, WorkspaceModel,
-    };
+    use crate::test_support::catalog::{catalog_with_model, TestViewBuilder};
+    use crate::test_support::workspace::{relationship, TestModelBuilder};
+    use crate::workspace::ViewKind;
 
-    fn element(id: &str, name: &str) -> (ElementId, ElementMetadata) {
-        let id = ElementId::new(id);
-        (
-            id.clone(),
-            ElementMetadata {
-                id,
-                name: name.to_owned(),
-                description: None,
-                technology: None,
-                tags: Vec::new(),
-                kind: ElementKind::Container,
-            },
-        )
-    }
-
-    fn relationship(id: &str, source: &str, destination: &str) -> RelationshipMetadata {
-        RelationshipMetadata {
-            id: crate::ids::RelationshipId::new(id),
-            source_id: ElementId::new(source),
-            destination_id: ElementId::new(destination),
-            description: Some(format!("{source} to {destination}")),
-            technology: Some("HTTPS".to_owned()),
-            tags: Vec::new(),
-        }
-    }
-
-    fn view(
+    fn view_builder(
         key: &str,
         name: &str,
         kind: ViewKind,
         elements: &[&str],
         child_links: &[(&str, &[&str])],
         key_view_key: Option<&str>,
-    ) -> ViewInfo {
-        ViewInfo {
-            key: key.to_owned(),
-            name: name.to_owned(),
-            kind,
-            description: None,
-            svg_path: std::path::PathBuf::from(format!("{key}.svg")),
-            element_ids: elements.iter().copied().map(ElementId::new).collect(),
-            child_view_keys_by_element_id: child_links
-                .iter()
-                .map(|(element, keys)| {
-                    (
-                        ElementId::new(*element),
-                        keys.iter().map(|key| (*key).to_owned()).collect(),
-                    )
-                })
-                .collect(),
-            primary_view_key: None,
-            key_view_key: key_view_key.map(str::to_owned),
+    ) -> TestViewBuilder {
+        let mut builder = TestViewBuilder::new(key)
+            .named(name)
+            .kind(kind)
+            .elements(elements.iter().copied());
+        for (element, keys) in child_links {
+            builder = builder.child_link(element, keys.iter().copied());
         }
+        if let Some(key_view_key) = key_view_key {
+            builder = builder.key_view_key(key_view_key);
+        }
+        builder
+    }
+
+    fn https_relationship(
+        id: &str,
+        source: &str,
+        destination: &str,
+    ) -> crate::workspace::RelationshipMetadata {
+        let mut relationship = relationship(id, source, destination);
+        relationship.description = Some(format!("{source} to {destination}"));
+        relationship.technology = Some("HTTPS".to_owned());
+        relationship
     }
 
     fn catalog() -> ViewCatalog {
-        let mut model = WorkspaceModel::default();
-        for (id, element) in [
-            element("api", "API"),
-            element("database", "Database"),
-            element("browser", "Browser"),
-        ] {
-            model.elements.insert(id, element);
-        }
-        let outgoing = relationship("r1", "api", "database");
-        let incoming = relationship("r2", "browser", "api");
-        model
-            .outgoing_relationships_by_element
-            .insert(ElementId::new("api"), vec![outgoing.id.clone()]);
-        model
-            .incoming_relationships_by_element
-            .insert(ElementId::new("api"), vec![incoming.id.clone()]);
-        model.relationships.insert(outgoing.id.clone(), outgoing);
-        model.relationships.insert(incoming.id.clone(), incoming);
+        let model = TestModelBuilder::new()
+            .container("api", "API")
+            .container("database", "Database")
+            .container("browser", "Browser")
+            .relationship(https_relationship("r1", "api", "database"))
+            .relationship(https_relationship("r2", "browser", "api"))
+            .outgoing("api", &["r1"])
+            .incoming("api", &["r2"])
+            .build();
 
-        ViewCatalog::new(vec![
-            view(
-                "current",
-                "Current",
-                ViewKind::Container,
-                &["api", "database", "browser"],
-                &[("api", &["api-detail", "api-detail"][..])],
-                Some("current-key"),
-            ),
-            view(
-                "api-detail",
-                "API Detail",
-                ViewKind::Component,
-                &["api"],
-                &[],
-                None,
-            ),
-            view(
-                "database-view",
-                "Database View",
-                ViewKind::Component,
-                &["database"],
-                &[],
-                None,
-            ),
-            view(
-                "browser-view",
-                "Browser View",
-                ViewKind::SystemContext,
-                &["browser"],
-                &[],
-                None,
-            ),
-            view("current-key", "Current Key", ViewKind::Key, &[], &[], None),
-        ])
-        .unwrap()
-        .with_model(model)
+        catalog_with_model(
+            [
+                view_builder(
+                    "current",
+                    "Current",
+                    ViewKind::Container,
+                    &["api", "database", "browser"],
+                    &[("api", &["api-detail", "api-detail"][..])],
+                    Some("current-key"),
+                )
+                .build(),
+                view_builder(
+                    "api-detail",
+                    "API Detail",
+                    ViewKind::Component,
+                    &["api"],
+                    &[],
+                    None,
+                )
+                .build(),
+                view_builder(
+                    "database-view",
+                    "Database View",
+                    ViewKind::Component,
+                    &["database"],
+                    &[],
+                    None,
+                )
+                .build(),
+                view_builder(
+                    "browser-view",
+                    "Browser View",
+                    ViewKind::SystemContext,
+                    &["browser"],
+                    &[],
+                    None,
+                )
+                .build(),
+                view_builder("current-key", "Current Key", ViewKind::Key, &[], &[], None).build(),
+            ],
+            model,
+        )
     }
 
     #[test]

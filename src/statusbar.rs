@@ -337,6 +337,8 @@ mod tests {
     use super::*;
     use crate::config::AppConfig;
     use crate::render::RenderedView;
+    use crate::test_support::catalog::TestViewBuilder;
+    use crate::test_support::workspace::container;
     use tui_kit::layout::{CellPixel, CellSize, PixelSize, PlacementEngine, PlacementPolicy};
 
     fn rendered() -> RenderedView {
@@ -350,17 +352,10 @@ mod tests {
     }
 
     fn view() -> ViewInfo {
-        ViewInfo {
-            key: "containers".to_owned(),
-            name: "Containers".to_owned(),
-            kind: crate::workspace::ViewKind::Container,
-            description: None,
-            svg_path: std::path::PathBuf::from("containers.svg"),
-            element_ids: std::collections::HashSet::new(),
-            child_view_keys_by_element_id: std::collections::HashMap::new(),
-            primary_view_key: None,
-            key_view_key: None,
-        }
+        TestViewBuilder::new("containers")
+            .named("Containers")
+            .kind(crate::workspace::ViewKind::Container)
+            .build()
     }
 
     fn ctx<'a>(
@@ -464,14 +459,7 @@ mod tests {
         let rendered = rendered();
         let view = view();
         let config = AppConfig::default();
-        let pinned = ElementMetadata {
-            id: crate::ids::ElementId::new("1"),
-            name: "API".to_owned(),
-            description: None,
-            technology: None,
-            tags: Vec::new(),
-            kind: crate::workspace::ElementKind::Container,
-        };
+        let (_id, pinned) = container("1", "API");
         let mut ctx = ctx(&rendered, &view, &config);
         ctx.pinned_element = Some(&pinned);
         ctx.pinned_element_connections = Some(ConnectionCounts {

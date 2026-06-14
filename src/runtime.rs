@@ -646,9 +646,8 @@ mod tests {
     use crate::backend::fake::{FakeTerminalBackend, FakeTerminalCall};
     use crate::clipboard::DefaultClipboard;
     use crate::logger::LogBuffer;
-    use crate::render::RasterBudget;
-    use crate::workspace::{ViewInfo, ViewKind};
-    use std::collections::{HashMap, HashSet};
+    use crate::test_support::catalog::{catalog, TestViewBuilder};
+    use crate::test_support::render;
     use std::num::NonZeroUsize;
     use std::path::{Path, PathBuf};
     use std::sync::{mpsc, Arc, Mutex};
@@ -708,18 +707,11 @@ exit 2
             let dir = tempfile::tempdir().unwrap();
             let svg_path = dir.path().join("view.svg");
             std::fs::write(&svg_path, r#"<svg width="100" height="100"/>"#).unwrap();
-            let catalog = ViewCatalog::new(vec![ViewInfo {
-                key: "view".to_owned(),
-                name: "View".to_owned(),
-                kind: ViewKind::SystemContext,
-                description: None,
-                svg_path,
-                element_ids: HashSet::new(),
-                child_view_keys_by_element_id: HashMap::new(),
-                primary_view_key: None,
-                key_view_key: None,
-            }])
-            .unwrap();
+            let catalog = catalog([TestViewBuilder::new("view")
+                .named("View")
+                .kind(crate::workspace::ViewKind::SystemContext)
+                .svg_path(svg_path)
+                .build()]);
             let (tx, _rx) = mpsc::channel();
             let focus = FocusManager::new(
                 FocusConfig {
@@ -733,7 +725,7 @@ exit 2
             Self {
                 terminal: FakeTerminalBackend::new(),
                 catalog,
-                render_cache: RenderCache::new(RasterBudget::default()),
+                render_cache: render::render_cache(),
                 viewport: ViewportState::default(),
                 state: AppState::default(),
                 scheduler: RenderScheduler::new(NonZeroUsize::new(1).unwrap(), tx),

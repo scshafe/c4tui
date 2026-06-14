@@ -266,57 +266,33 @@ pub(crate) fn diagram_placement_policy(choice: &PlacementChoiceConfig) -> Placem
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::{ElementBBox, RasterBudget, RenderedView};
-    use crate::workspace::{ViewInfo, ViewKind};
-    use std::collections::HashMap;
+    use crate::render::ElementBBox;
+    use crate::test_support::catalog::{catalog, TestViewBuilder};
+    use crate::test_support::render;
     use std::fs;
-    use tui_kit::layout::{CellPixel, CellSize};
-
-    fn budget() -> RasterBudget {
-        RasterBudget {
-            quality: 1.0,
-            ..RasterBudget::default()
-        }
-    }
 
     fn canvas() -> CanvasMetrics {
-        CanvasMetrics::new(CellSize::new(200, 50), CellPixel::new(8, 16))
+        render::canvas(200, 50, 8, 16)
     }
 
-    fn view_info() -> ViewInfo {
-        ViewInfo {
-            key: "view".to_owned(),
-            name: "View".to_owned(),
-            kind: ViewKind::SystemLandscape,
-            description: None,
-            svg_path: std::path::PathBuf::from("unused.svg"),
-            element_ids: std::collections::HashSet::new(),
-            child_view_keys_by_element_id: std::collections::HashMap::new(),
-            primary_view_key: None,
-            key_view_key: None,
-        }
-    }
-
-    fn rendered_view(raster: PixelSize) -> RenderedView {
-        let rgba_len = raster.width.saturating_mul(raster.height).saturating_mul(4) as usize;
-        RenderedView {
-            natural_size: raster,
-            raster_size: raster,
-            png: Vec::new(),
-            rgba: vec![255; rgba_len],
-            bboxes: Vec::new(),
-        }
+    fn view_info() -> crate::workspace::ViewInfo {
+        TestViewBuilder::new("view")
+            .named("View")
+            .kind(crate::workspace::ViewKind::SystemLandscape)
+            .svg_path("unused.svg")
+            .build()
     }
 
     fn cached_parts(
         raster: PixelSize,
         policy: PlacementPolicy,
     ) -> (ViewCatalog, RenderCache, ViewportState) {
-        let catalog = ViewCatalog::new(vec![view_info()]).unwrap();
-        let mut cache = RenderCache::new(budget());
-        let viewport = ViewportState::new(policy);
-        cache.insert_rendered(ViewId::first(), rendered_view(raster));
-        (catalog, cache, viewport)
+        render::cached_render_parts(
+            catalog([view_info()]),
+            ViewId::first(),
+            render::rendered_view(raster),
+            ViewportState::new(policy),
+        )
     }
 
     #[test]
@@ -330,35 +306,21 @@ mod tests {
         )
         .unwrap();
         fs::write(&child_svg, r#"<svg width="100" height="100" />"#).unwrap();
-        let mut child_view_keys_by_element_id = HashMap::new();
-        child_view_keys_by_element_id
-            .insert(crate::ids::ElementId::new("1"), vec!["child".to_owned()]);
-        let catalog = ViewCatalog::new(vec![
-            ViewInfo {
-                key: "parent".to_owned(),
-                name: "Parent".to_owned(),
-                kind: ViewKind::SystemContext,
-                description: None,
-                svg_path: parent_svg,
-                element_ids: std::collections::HashSet::from([ElementId::new("1")]),
-                child_view_keys_by_element_id,
-                primary_view_key: None,
-                key_view_key: None,
-            },
-            ViewInfo {
-                key: "child".to_owned(),
-                name: "Child".to_owned(),
-                kind: ViewKind::Container,
-                description: None,
-                svg_path: child_svg,
-                element_ids: std::collections::HashSet::new(),
-                child_view_keys_by_element_id: std::collections::HashMap::new(),
-                primary_view_key: None,
-                key_view_key: None,
-            },
-        ])
-        .unwrap();
-        let mut cache = RenderCache::new(budget());
+        let catalog = catalog([
+            TestViewBuilder::new("parent")
+                .named("Parent")
+                .kind(crate::workspace::ViewKind::SystemContext)
+                .svg_path(parent_svg)
+                .elements(["1"])
+                .child_link("1", ["child"])
+                .build(),
+            TestViewBuilder::new("child")
+                .named("Child")
+                .kind(crate::workspace::ViewKind::Container)
+                .svg_path(child_svg)
+                .build(),
+        ]);
+        let mut cache = render::render_cache();
         let mut viewport = ViewportState::default();
 
         let canvas = canvas();
@@ -497,7 +459,7 @@ mod tests {
     fn zoomed_hit_testing_uses_viewport_source_crop() {
         let raster = PixelSize::new(400, 200);
         let canvas = canvas();
-        let mut rendered = rendered_view(raster);
+        let mut rendered = render::rendered_view(raster);
         rendered.bboxes.push(ElementBBox {
             element_id: ElementId::new("center"),
             x: 190.0,
@@ -505,8 +467,8 @@ mod tests {
             width: 20.0,
             height: 20.0,
         });
-        let catalog = ViewCatalog::new(vec![view_info()]).unwrap();
-        let mut cache = RenderCache::new(budget());
+        let catalog = catalog([view_info()]);
+        let mut cache = render::render_cache();
         cache.insert_rendered(ViewId::first(), rendered);
         let mut viewport = ViewportState::new(legacy_crop_policy());
 

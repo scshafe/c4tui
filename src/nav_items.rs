@@ -166,43 +166,16 @@ impl NavItem for ViewNavItem {
 mod tests {
     use super::*;
 
-    use std::collections::{HashMap, HashSet};
-    use std::path::PathBuf;
-
-    use crate::ids::ElementId;
-    use crate::workspace::{ElementKind, ElementMetadata};
-
-    fn element(id: &str, name: &str, kind: ElementKind) -> (ElementId, ElementMetadata) {
-        let id = ElementId::new(id);
-        (
-            id.clone(),
-            ElementMetadata {
-                id,
-                name: name.to_owned(),
-                description: None,
-                technology: None,
-                tags: Vec::new(),
-                kind,
-            },
-        )
-    }
+    use crate::test_support::catalog::TestViewBuilder;
+    use crate::test_support::workspace::element;
+    use crate::workspace::ElementKind;
 
     fn view_info(key: &str, name: &str, kind: ViewKind, elements: &[&str]) -> ViewInfo {
-        let mut element_ids = HashSet::new();
-        for e in elements {
-            element_ids.insert(ElementId::new(*e));
-        }
-        ViewInfo {
-            key: key.to_owned(),
-            name: name.to_owned(),
-            kind,
-            description: None,
-            svg_path: PathBuf::from(format!("{key}.svg")),
-            element_ids,
-            child_view_keys_by_element_id: HashMap::new(),
-            primary_view_key: None,
-            key_view_key: None,
-        }
+        TestViewBuilder::new(key)
+            .named(name)
+            .kind(kind)
+            .elements(elements.iter().copied())
+            .build()
     }
 
     #[test]

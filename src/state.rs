@@ -404,23 +404,15 @@ impl Default for UpdateResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ids::{ElementId, RelationshipId};
+    use crate::ids::ElementId;
     use crate::link_directory::LinkKind;
-    use crate::render::RasterBudget;
-    use crate::workspace::{RelationshipMetadata, ViewInfo, WorkspaceModel};
-    use std::collections::{HashMap, HashSet};
+    use crate::test_support::catalog::{catalog, catalog_with_model, TestViewBuilder};
+    use crate::test_support::render;
+    use crate::test_support::workspace::{relationship, TestModelBuilder};
     use std::fs;
-    use tui_kit::layout::{CellPixel, CellSize};
 
     fn canvas() -> CanvasMetrics {
-        CanvasMetrics::new(CellSize::new(80, 24), CellPixel::new(8, 16))
-    }
-
-    fn budget() -> RasterBudget {
-        RasterBudget {
-            quality: 1.0,
-            ..RasterBudget::default()
-        }
+        render::canvas(80, 24, 8, 16)
     }
 
     fn test_parts() -> (ViewCatalog, RenderCache, ViewportState) {
@@ -441,84 +433,49 @@ mod tests {
         .unwrap();
         fs::write(&child_svg, r#"<svg width="100" height="100" />"#).unwrap();
 
-        let mut child_view_keys_by_element_id = HashMap::new();
-        child_view_keys_by_element_id.insert(ElementId::new("1"), vec!["child".to_owned()]);
-
         (
-            ViewCatalog::new(vec![
-                ViewInfo {
-                    key: "parent".to_owned(),
-                    name: "Parent".to_owned(),
-                    kind: crate::workspace::ViewKind::SystemContext,
-                    description: None,
-                    svg_path: parent_svg,
-                    element_ids: HashSet::from([ElementId::new("1")]),
-                    child_view_keys_by_element_id,
-                    primary_view_key: None,
-                    key_view_key: None,
-                },
-                ViewInfo {
-                    key: "child".to_owned(),
-                    name: "Child".to_owned(),
-                    kind: crate::workspace::ViewKind::Container,
-                    description: None,
-                    svg_path: child_svg,
-                    element_ids: HashSet::new(),
-                    child_view_keys_by_element_id: HashMap::new(),
-                    primary_view_key: None,
-                    key_view_key: None,
-                },
-            ])
-            .unwrap(),
-            RenderCache::new(budget()),
+            catalog([
+                TestViewBuilder::new("parent")
+                    .named("Parent")
+                    .kind(crate::workspace::ViewKind::SystemContext)
+                    .svg_path(parent_svg)
+                    .elements(["1"])
+                    .child_link("1", ["child"])
+                    .build(),
+                TestViewBuilder::new("child")
+                    .named("Child")
+                    .kind(crate::workspace::ViewKind::Container)
+                    .svg_path(child_svg)
+                    .build(),
+            ]),
+            render::render_cache(),
             ViewportState::default(),
         )
     }
 
     fn connection_parts() -> (ViewCatalog, RenderCache, ViewportState) {
-        let views = vec![
-            ViewInfo {
-                key: "api".to_owned(),
-                name: "API".to_owned(),
-                kind: crate::workspace::ViewKind::Container,
-                description: None,
-                svg_path: std::path::PathBuf::from("api.svg"),
-                element_ids: HashSet::from([ElementId::new("api")]),
-                child_view_keys_by_element_id: HashMap::new(),
-                primary_view_key: None,
-                key_view_key: None,
-            },
-            ViewInfo {
-                key: "database".to_owned(),
-                name: "Database".to_owned(),
-                kind: crate::workspace::ViewKind::Component,
-                description: None,
-                svg_path: std::path::PathBuf::from("database.svg"),
-                element_ids: HashSet::from([ElementId::new("database")]),
-                child_view_keys_by_element_id: HashMap::new(),
-                primary_view_key: None,
-                key_view_key: None,
-            },
-        ];
-        let relationship = RelationshipMetadata {
-            id: RelationshipId::new("r1"),
-            source_id: ElementId::new("api"),
-            destination_id: ElementId::new("database"),
-            description: Some("Reads from".to_owned()),
-            technology: None,
-            tags: Vec::new(),
-        };
-        let mut model = WorkspaceModel::default();
-        model
-            .outgoing_relationships_by_element
-            .insert(ElementId::new("api"), vec![relationship.id.clone()]);
-        model
-            .relationships
-            .insert(relationship.id.clone(), relationship);
+        let model = TestModelBuilder::new()
+            .relationship(relationship("r1", "api", "database"))
+            .outgoing("api", &["r1"])
+            .build();
 
         (
-            ViewCatalog::new(views).unwrap().with_model(model),
-            RenderCache::new(budget()),
+            catalog_with_model(
+                [
+                    TestViewBuilder::new("api")
+                        .named("API")
+                        .kind(crate::workspace::ViewKind::Container)
+                        .elements(["api"])
+                        .build(),
+                    TestViewBuilder::new("database")
+                        .named("Database")
+                        .kind(crate::workspace::ViewKind::Component)
+                        .elements(["database"])
+                        .build(),
+                ],
+                model,
+            ),
+            render::render_cache(),
             ViewportState::default(),
         )
     }

@@ -189,33 +189,16 @@ pub(crate) fn image_id_for_view(id: ViewId) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::{RelationshipMetadata, ViewKind};
-    use std::collections::HashMap;
+    use crate::test_support::catalog::TestViewBuilder;
+    use crate::test_support::workspace::{relationship, TestModelBuilder};
+    use crate::workspace::ViewKind;
     use std::fs;
 
     fn view_with_elements(key: &str, kind: ViewKind, ids: &[&str]) -> ViewInfo {
-        ViewInfo {
-            key: key.to_owned(),
-            name: key.to_owned(),
-            kind,
-            description: None,
-            svg_path: std::path::PathBuf::from(format!("{key}.svg")),
-            element_ids: ids.iter().copied().map(ElementId::new).collect(),
-            child_view_keys_by_element_id: HashMap::new(),
-            primary_view_key: None,
-            key_view_key: None,
-        }
-    }
-
-    fn relationship(id: &str, source: &str, destination: &str) -> RelationshipMetadata {
-        RelationshipMetadata {
-            id: RelationshipId::new(id),
-            source_id: ElementId::new(source),
-            destination_id: ElementId::new(destination),
-            description: None,
-            technology: None,
-            tags: Vec::new(),
-        }
+        TestViewBuilder::new(key)
+            .kind(kind)
+            .elements(ids.iter().copied())
+            .build()
     }
 
     #[test]
@@ -223,17 +206,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let svg = dir.path().join("landscape.svg");
         fs::write(&svg, "<svg />").unwrap();
-        let catalog = ViewCatalog::new(vec![ViewInfo {
-            key: "landscape".to_owned(),
-            name: "Landscape".to_owned(),
-            kind: ViewKind::SystemLandscape,
-            description: None,
-            svg_path: svg,
-            element_ids: std::collections::HashSet::new(),
-            child_view_keys_by_element_id: std::collections::HashMap::new(),
-            primary_view_key: None,
-            key_view_key: None,
-        }])
+        let catalog = ViewCatalog::new(vec![TestViewBuilder::new("landscape")
+            .named("Landscape")
+            .kind(ViewKind::SystemLandscape)
+            .svg_path(svg)
+            .build()])
         .unwrap();
 
         assert_eq!(catalog.views.len(), 1);
@@ -247,34 +224,14 @@ mod tests {
 
     #[test]
     fn connection_candidates_follow_outgoing_and_incoming_relationships_to_views() {
-        let mut model = WorkspaceModel::default();
-        model.relationships.insert(
-            RelationshipId::new("r1"),
-            relationship("r1", "api", "database"),
-        );
-        model.relationships.insert(
-            RelationshipId::new("r2"),
-            relationship("r2", "browser", "api"),
-        );
-        model.relationships.insert(
-            RelationshipId::new("r3"),
-            relationship("r3", "api", "cache"),
-        );
-        model.relationships.insert(
-            RelationshipId::new("r4"),
-            relationship("r4", "api", "database"),
-        );
-        model.outgoing_relationships_by_element.insert(
-            ElementId::new("api"),
-            vec![
-                RelationshipId::new("r1"),
-                RelationshipId::new("r3"),
-                RelationshipId::new("r4"),
-            ],
-        );
-        model
-            .incoming_relationships_by_element
-            .insert(ElementId::new("api"), vec![RelationshipId::new("r2")]);
+        let model = TestModelBuilder::new()
+            .relationship(relationship("r1", "api", "database"))
+            .relationship(relationship("r2", "browser", "api"))
+            .relationship(relationship("r3", "api", "cache"))
+            .relationship(relationship("r4", "api", "database"))
+            .outgoing("api", &["r1", "r3", "r4"])
+            .incoming("api", &["r2"])
+            .build();
 
         let catalog = ViewCatalog::new(vec![
             view_with_elements(

@@ -23,6 +23,8 @@ mod runtime;
 mod state;
 mod statusbar;
 mod terminal;
+#[cfg(test)]
+mod test_support;
 mod view_catalog;
 mod viewport_state;
 mod workspace;

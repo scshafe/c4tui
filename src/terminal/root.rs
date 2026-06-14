@@ -86,58 +86,25 @@ pub(super) fn pinned_connection_counts(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ids::RelationshipId;
-    use crate::workspace::{RelationshipMetadata, ViewInfo, WorkspaceModel};
-    use std::collections::HashMap;
-    use std::path::PathBuf;
+    use crate::test_support::catalog::TestViewBuilder;
+    use crate::test_support::workspace::{relationship, TestModelBuilder};
 
-    fn view_with_elements(key: &str, elements: &[&str]) -> ViewInfo {
-        ViewInfo {
-            key: key.to_owned(),
-            name: key.to_owned(),
-            kind: crate::workspace::ViewKind::Container,
-            description: None,
-            svg_path: PathBuf::from(format!("{key}.svg")),
-            element_ids: elements.iter().map(|id| ElementId::new(*id)).collect(),
-            child_view_keys_by_element_id: HashMap::new(),
-            primary_view_key: None,
-            key_view_key: None,
-        }
-    }
-
-    fn relationship(id: &str, source: &str, destination: &str) -> RelationshipMetadata {
-        RelationshipMetadata {
-            id: RelationshipId::new(id),
-            source_id: ElementId::new(source),
-            destination_id: ElementId::new(destination),
-            description: None,
-            technology: None,
-            tags: Vec::new(),
-        }
+    fn view_with_elements(key: &str, elements: &[&str]) -> crate::workspace::ViewInfo {
+        TestViewBuilder::new(key)
+            .kind(crate::workspace::ViewKind::Container)
+            .elements(elements.iter().copied())
+            .build()
     }
 
     #[test]
     fn pinned_connection_counts_use_navigable_candidates() {
-        let mut model = WorkspaceModel::default();
-        model.relationships.insert(
-            RelationshipId::new("r1"),
-            relationship("r1", "api", "database"),
-        );
-        model.relationships.insert(
-            RelationshipId::new("r2"),
-            relationship("r2", "api", "cache"),
-        );
-        model.relationships.insert(
-            RelationshipId::new("r3"),
-            relationship("r3", "browser", "api"),
-        );
-        model.outgoing_relationships_by_element.insert(
-            ElementId::new("api"),
-            vec![RelationshipId::new("r1"), RelationshipId::new("r2")],
-        );
-        model
-            .incoming_relationships_by_element
-            .insert(ElementId::new("api"), vec![RelationshipId::new("r3")]);
+        let model = TestModelBuilder::new()
+            .relationship(relationship("r1", "api", "database"))
+            .relationship(relationship("r2", "api", "cache"))
+            .relationship(relationship("r3", "browser", "api"))
+            .outgoing("api", &["r1", "r2"])
+            .incoming("api", &["r3"])
+            .build();
 
         let catalog = ViewCatalog::new(vec![
             view_with_elements("current", &["api", "database", "cache", "browser"]),

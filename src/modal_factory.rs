@@ -194,65 +194,47 @@ fn thumbnails_from_view_picker(picker: &NavPicker<ViewNavItem>) -> Vec<Thumbnail
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ids::ElementId;
-    use crate::workspace::{ElementKind, ElementMetadata, ViewInfo, ViewKind, WorkspaceModel};
-    use std::path::PathBuf;
+    use crate::test_support::catalog::{catalog_with_model, TestViewBuilder};
+    use crate::test_support::workspace::TestModelBuilder;
+    use crate::workspace::{ElementKind, ViewKind};
 
-    fn view(
+    fn view_builder(
         key: &str,
         name: &str,
         kind: ViewKind,
         elements: &[&str],
         child_links: &[(&str, &[&str])],
-    ) -> ViewInfo {
-        ViewInfo {
-            key: key.to_owned(),
-            name: name.to_owned(),
-            kind,
-            description: None,
-            svg_path: PathBuf::from(format!("{key}.svg")),
-            element_ids: elements.iter().copied().map(ElementId::new).collect(),
-            child_view_keys_by_element_id: child_links
-                .iter()
-                .map(|(element, keys)| {
-                    (
-                        ElementId::new(*element),
-                        keys.iter().map(|key| (*key).to_owned()).collect(),
-                    )
-                })
-                .collect(),
-            primary_view_key: None,
-            key_view_key: None,
+    ) -> TestViewBuilder {
+        let mut builder = TestViewBuilder::new(key)
+            .named(name)
+            .kind(kind)
+            .elements(elements.iter().copied());
+        for (element, keys) in child_links {
+            builder = builder.child_link(element, keys.iter().copied());
         }
+        builder
     }
 
     fn catalog() -> ViewCatalog {
-        let mut model = WorkspaceModel::default();
-        model.elements.insert(
-            ElementId::new("system"),
-            ElementMetadata {
-                id: ElementId::new("system"),
-                name: "System".to_owned(),
-                description: None,
-                technology: None,
-                tags: Vec::new(),
-                kind: ElementKind::SoftwareSystem,
-            },
-        );
+        let model = TestModelBuilder::new()
+            .element("system", "System", ElementKind::SoftwareSystem)
+            .build();
 
-        ViewCatalog::new(vec![
-            view(
-                "system",
-                "System Context",
-                ViewKind::SystemContext,
-                &["system"],
-                &[("system", &["containers"][..])],
-            ),
-            view("containers", "Containers", ViewKind::Container, &[], &[]),
-            view("components", "Components", ViewKind::Component, &[], &[]),
-        ])
-        .unwrap()
-        .with_model(model)
+        catalog_with_model(
+            [
+                view_builder(
+                    "system",
+                    "System Context",
+                    ViewKind::SystemContext,
+                    &["system"],
+                    &[("system", &["containers"][..])],
+                )
+                .build(),
+                view_builder("containers", "Containers", ViewKind::Container, &[], &[]).build(),
+                view_builder("components", "Components", ViewKind::Component, &[], &[]).build(),
+            ],
+            model,
+        )
     }
 
     #[test]
@@ -330,14 +312,14 @@ mod tests {
 
     #[test]
     fn link_directory_without_candidates_does_not_prime_current_view() {
-        let catalog = ViewCatalog::new(vec![view(
+        let catalog = crate::test_support::catalog::catalog([view_builder(
             "single",
             "Single",
             ViewKind::SystemContext,
             &[],
             &[],
-        )])
-        .unwrap();
+        )
+        .build()]);
 
         let spawn = spawn_modal(ModalSpec::Link, &catalog, &AppState::default());
 
