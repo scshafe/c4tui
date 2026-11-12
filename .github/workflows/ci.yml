@@ -15,11 +15,27 @@ jobs:
         os: [ubuntu-latest, macos-14]
 
     steps:
+      # Cargo.toml depends on tui-kit by path (`../tui-kit`), so check c4tui
+      # out into a subdirectory and tui-kit beside it. tui-kit tracks `main`,
+      # matching a local sibling checkout; tui-kit's own CI gates its `main`
+      # against c4tui `main` (the c4tui consumer gate job).
       - uses: actions/checkout@v4
+        with:
+          path: c4tui
+      - uses: actions/checkout@v4
+        with:
+          repository: scshafe/tui-kit
+          ref: main
+          path: tui-kit
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: c4tui
       - run: cargo fmt --check
+        working-directory: c4tui
       - run: cargo clippy --all-targets -- -D warnings
+        working-directory: c4tui
       - run: cargo test
+        working-directory: c4tui
